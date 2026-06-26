@@ -380,8 +380,14 @@ else:
     </div>
     """, unsafe_allow_html=True)
 
-    # Tabbed Views: Monitoring vs Settings
-    tab_monitoring, tab_settings = st.tabs([" Live Monitoring", " Alert Settings"])
+    # Check if the logged-in user is an Admin or Developer
+    is_admin = st.session_state.user.email.strip().lower().startswith("admin@") or st.session_state.user.email.strip().lower() == "abinesharjunan850@gmail.com"
+
+    # Tabbed Views: Monitoring vs Settings (Settings tab only visible to Administrators)
+    if is_admin:
+        tab_monitoring, tab_settings = st.tabs(["🔍 Live Monitoring", "⚙️ Settings & User Management"])
+    else:
+        tab_monitoring = st.tabs(["🔍 Live Monitoring"])[0]
 
     with tab_monitoring:
         # 2. KPI Cards Row
@@ -634,139 +640,140 @@ else:
         else:
             st.info("No flow prediction records found in the database. Run live_sniffer.py to trigger captures.")
 
-    with tab_settings:
-        st.markdown("### Alert & Dispatcher Configurations")
-        
-        # Load active config
-        cfg = load_config()
-        
-        with st.form("settings_form"):
-            st.markdown("##### ✉️ SMTP Email Dispatcher")
-            smtp_host = st.text_input("SMTP Server Host", value=cfg.get("email", {}).get("smtp_server", ""))
-            smtp_port = st.number_input("SMTP Port", value=int(cfg.get("email", {}).get("smtp_port", 587)))
-            email_enabled = st.checkbox("Enable Email Alerting", value=bool(cfg.get("email", {}).get("enabled", False)))
-            sender_email = st.text_input("Sender Email Address", value=cfg.get("email", {}).get("sender_email", ""))
+    if is_admin:
+        with tab_settings:
+            st.markdown("### Alert & Dispatcher Configurations")
             
-            # Mask existing password if loaded
-            saved_password = cfg.get("email", {}).get("sender_password", "")
-            masked_password = "********" if saved_password else ""
-            sender_password = st.text_input("Sender Password / Application Key", type="password", value=masked_password)
+            # Load active config
+            cfg = load_config()
             
-            recipient_email = st.text_input("Recipient Email Address", value=cfg.get("email", {}).get("recipient_email", ""))
-            
-            st.markdown("<hr style='border-color: rgba(255,255,255,0.08);'>", unsafe_allow_html=True)
-            
-            st.markdown("#####  Telegram Bot API Dispatcher")
-            saved_token = cfg.get("telegram", {}).get("bot_token", "")
-            masked_token = "********" if saved_token else ""
-            tg_token = st.text_input("Bot Token ID", type="password", value=masked_token)
-            
-            tg_chat_id = st.text_input("Channel/Chat Target ID", value=cfg.get("telegram", {}).get("chat_id", ""))
-            tg_enabled = st.checkbox("Enable Telegram Alerting", value=bool(cfg.get("telegram", {}).get("enabled", False)))
-            
-            save_btn = st.form_submit_button("Commit Alert Configurations")
-            
-            if save_btn:
-                # Prepare saved configs, restoring masked inputs
-                email_pwd = saved_password if sender_password == "********" else sender_password
-                tg_bot_token = saved_token if tg_token == "********" else tg_token
+            with st.form("settings_form"):
+                st.markdown("##### ✉️ SMTP Email Dispatcher")
+                smtp_host = st.text_input("SMTP Server Host", value=cfg.get("email", {}).get("smtp_server", ""))
+                smtp_port = st.number_input("SMTP Port", value=int(cfg.get("email", {}).get("smtp_port", 587)))
+                email_enabled = st.checkbox("Enable Email Alerting", value=bool(cfg.get("email", {}).get("enabled", False)))
+                sender_email = st.text_input("Sender Email Address", value=cfg.get("email", {}).get("sender_email", ""))
                 
-                new_cfg = {
-                    "email": {
-                        "smtp_server": smtp_host.strip(),
-                        "smtp_port": int(smtp_port),
-                        "sender_email": sender_email.strip(),
-                        "sender_password": email_pwd,
-                        "recipient_email": recipient_email.strip(),
-                        "enabled": email_enabled
-                    },
-                    "telegram": {
-                        "bot_token": tg_bot_token.strip(),
-                        "chat_id": tg_chat_id.strip(),
-                        "enabled": tg_enabled
-                    }
-                }
-                save_config(new_cfg)
-                st.success("✅ Configurations saved successfully!")
-                time.sleep(1.0)
-                st.rerun()
-
-        # Manual test buttons outside the commit form
-        test_col1, test_col2 = st.columns(2)
-        
-        with test_col1:
-            if st.button(" Send Test Email Alert", use_container_width=True):
-                timestamp_str = datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
-                email_html = f"""
-                <html>
-                <body style="font-family: sans-serif; padding: 20px; background-color: #f5f5f5;">
-                    <div style="max-width: 600px; margin: auto; border: 1px solid #007bff; border-radius: 8px; background-color: #ffffff; padding:24px;">
-                        <h2>IDS Connection Test</h2>
-                        <p>This is a manual connection test generated by your Streamlit NIDS settings.</p>
-                        <p><strong>Timestamp:</strong> {timestamp_str} UTC</p>
-                    </div>
-                </body>
-                </html>
-                """
-                # Fetch fresh configurations for the test
-                em_cfg = load_config().get("email", {})
-                if em_cfg.get("sender_email") and em_cfg.get("recipient_email"):
-                    success = send_email_message(em_cfg, "🛡️ [IDS TEST ALERT]", email_html)
-                    if success:
-                        st.success("✉️ Test email dispatched successfully!")
-                    else:
-                        st.error("❌ Test email dispatch failed. Verify your SMTP credentials.")
-                else:
-                    st.warning("⚠️ Email configurations are missing.")
+                # Mask existing password if loaded
+                saved_password = cfg.get("email", {}).get("sender_password", "")
+                masked_password = "********" if saved_password else ""
+                sender_password = st.text_input("Sender Password / Application Key", type="password", value=masked_password)
+                
+                recipient_email = st.text_input("Recipient Email Address", value=cfg.get("email", {}).get("recipient_email", ""))
+                
+                st.markdown("<hr style='border-color: rgba(255,255,255,0.08);'>", unsafe_allow_html=True)
+                
+                st.markdown("#####  Telegram Bot API Dispatcher")
+                saved_token = cfg.get("telegram", {}).get("bot_token", "")
+                masked_token = "********" if saved_token else ""
+                tg_token = st.text_input("Bot Token ID", type="password", value=masked_token)
+                
+                tg_chat_id = st.text_input("Channel/Chat Target ID", value=cfg.get("telegram", {}).get("chat_id", ""))
+                tg_enabled = st.checkbox("Enable Telegram Alerting", value=bool(cfg.get("telegram", {}).get("enabled", False)))
+                
+                save_btn = st.form_submit_button("Commit Alert Configurations")
+                
+                if save_btn:
+                    # Prepare saved configs, restoring masked inputs
+                    email_pwd = saved_password if sender_password == "********" else sender_password
+                    tg_bot_token = saved_token if tg_token == "********" else tg_token
                     
-        with test_col2:
-            if st.button("🚀 Send Test Telegram Message", use_container_width=True):
-                timestamp_str = datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
-                tg_msg = (
-                    f"🛡️ *[IDS TEST ALERT]*\n"
-                    f"━━━━━━━━━━━━━━━━━━\n"
-                    f"This is a manual connection test from your Streamlit dashboard.\n"
-                    f"📅 *Timestamp:* `{timestamp_str} UTC`"
-                )
-                tg_cfg = load_config().get("telegram", {})
-                if tg_cfg.get("bot_token") and tg_cfg.get("chat_id"):
-                    success = send_telegram_message(tg_cfg["bot_token"], tg_cfg["chat_id"], tg_msg)
-                    if success:
-                        st.success("💬 Telegram test message dispatched successfully!")
-                    else:
-                        st.error("❌ Telegram dispatch failed. Verify token and chat ID.")
-                else:
-                    st.warning("⚠️ Telegram configurations are missing.")
-
-        st.markdown("<hr style='border-color: rgba(255,255,255,0.08);'>", unsafe_allow_html=True)
-        st.markdown("### 👤 Registered Operators Management")
-        
-        try:
-            users_list = User.get_all()
-        except Exception as e:
-            users_list = []
-            st.error(f"Failed to fetch operator accounts: {e}")
+                    new_cfg = {
+                        "email": {
+                            "smtp_server": smtp_host.strip(),
+                            "smtp_port": int(smtp_port),
+                            "sender_email": sender_email.strip(),
+                            "sender_password": email_pwd,
+                            "recipient_email": recipient_email.strip(),
+                            "enabled": email_enabled
+                        },
+                        "telegram": {
+                            "bot_token": tg_bot_token.strip(),
+                            "chat_id": tg_chat_id.strip(),
+                            "enabled": tg_enabled
+                        }
+                    }
+                    save_config(new_cfg)
+                    st.success("✅ Configurations saved successfully!")
+                    time.sleep(1.0)
+                    st.rerun()
+    
+            # Manual test buttons outside the commit form
+            test_col1, test_col2 = st.columns(2)
             
-        if users_list:
-            for u in users_list:
-                col_u1, col_u2, col_u3 = st.columns([2, 2, 1])
-                with col_u1:
-                    st.markdown(f"**Operator**: `{u['username']}` (ID: #{u['id']})")
-                with col_u2:
-                    st.markdown(f"**Email**: `{u['email']}`")
-                with col_u3:
-                    if u['id'] == st.session_state.user.id:
-                        st.markdown("<span style='color: #00b894; font-weight:600;'>Active Session</span>", unsafe_allow_html=True)
+            with test_col1:
+                if st.button(" Send Test Email Alert", use_container_width=True):
+                    timestamp_str = datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
+                    email_html = f"""
+                    <html>
+                    <body style="font-family: sans-serif; padding: 20px; background-color: #f5f5f5;">
+                        <div style="max-width: 600px; margin: auto; border: 1px solid #007bff; border-radius: 8px; background-color: #ffffff; padding:24px;">
+                            <h2>IDS Connection Test</h2>
+                            <p>This is a manual connection test generated by your Streamlit NIDS settings.</p>
+                            <p><strong>Timestamp:</strong> {timestamp_str} UTC</p>
+                        </div>
+                    </body>
+                    </html>
+                    """
+                    # Fetch fresh configurations for the test
+                    em_cfg = load_config().get("email", {})
+                    if em_cfg.get("sender_email") and em_cfg.get("recipient_email"):
+                        success = send_email_message(em_cfg, "🛡️ [IDS TEST ALERT]", email_html)
+                        if success:
+                            st.success("✉️ Test email dispatched successfully!")
+                        else:
+                            st.error("❌ Test email dispatch failed. Verify your SMTP credentials.")
                     else:
-                        if st.button("Delete Account", key=f"del_u_{u['id']}", use_container_width=True):
-                            if User.delete(u['id']):
-                                st.success(f"Operator '{u['username']}' deleted.")
-                                time.sleep(1.0)
-                                st.rerun()
-                            else:
-                                st.error("Failed to delete account.")
-        else:
-            st.info("No operator accounts registered.")
+                        st.warning("⚠️ Email configurations are missing.")
+                        
+            with test_col2:
+                if st.button("🚀 Send Test Telegram Message", use_container_width=True):
+                    timestamp_str = datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
+                    tg_msg = (
+                        f"🛡️ *[IDS TEST ALERT]*\n"
+                        f"━━━━━━━━━━━━━━━━━━\n"
+                        f"This is a manual connection test from your Streamlit dashboard.\n"
+                        f"📅 *Timestamp:* `{timestamp_str} UTC`"
+                    )
+                    tg_cfg = load_config().get("telegram", {})
+                    if tg_cfg.get("bot_token") and tg_cfg.get("chat_id"):
+                        success = send_telegram_message(tg_cfg["bot_token"], tg_cfg["chat_id"], tg_msg)
+                        if success:
+                            st.success("💬 Telegram test message dispatched successfully!")
+                        else:
+                            st.error("❌ Telegram dispatch failed. Verify token and chat ID.")
+                    else:
+                        st.warning("⚠️ Telegram configurations are missing.")
+    
+            st.markdown("<hr style='border-color: rgba(255,255,255,0.08);'>", unsafe_allow_html=True)
+            st.markdown("### 👤 Registered Operators Management")
+            
+            try:
+                users_list = User.get_all()
+            except Exception as e:
+                users_list = []
+                st.error(f"Failed to fetch operator accounts: {e}")
+                
+            if users_list:
+                for u in users_list:
+                    col_u1, col_u2, col_u3 = st.columns([2, 2, 1])
+                    with col_u1:
+                        st.markdown(f"**Operator**: `{u['username']}` (ID: #{u['id']})")
+                    with col_u2:
+                        st.markdown(f"**Email**: `{u['email']}`")
+                    with col_u3:
+                        if u['id'] == st.session_state.user.id:
+                            st.markdown("<span style='color: #00b894; font-weight:600;'>Active Session</span>", unsafe_allow_html=True)
+                        else:
+                            if st.button("Delete Account", key=f"del_u_{u['id']}", use_container_width=True):
+                                if User.delete(u['id']):
+                                    st.success(f"Operator '{u['username']}' deleted.")
+                                    time.sleep(1.0)
+                                    st.rerun()
+                                else:
+                                    st.error("Failed to delete account.")
+            else:
+                st.info("No operator accounts registered.")
 
     # 5. Handle Auto Refresh Rerun Trigger
     if refresh_enabled:
