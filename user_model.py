@@ -59,3 +59,24 @@ class User:
     def check_password(self, password_raw: str) -> bool:
         """Verifies if the raw password matches the saved hash."""
         return check_password_hash(self.password_hash, password_raw)
+
+    @staticmethod
+    def get_all():
+        """Retrieves all registered users."""
+        with get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT id, username, email, created_at FROM users ORDER BY username ASC")
+            return [dict(row) for row in cursor.fetchall()]
+
+    @staticmethod
+    def delete(user_id: int) -> bool:
+        """Deletes a user by their unique ID."""
+        with get_connection() as conn:
+            cursor = conn.cursor()
+            try:
+                cursor.execute("DELETE FROM users WHERE id = ?", (int(user_id),))
+                conn.commit()
+                return True
+            except Exception as e:
+                print(f"Error deleting user: {e}")
+                return False

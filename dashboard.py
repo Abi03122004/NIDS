@@ -738,6 +738,36 @@ else:
                 else:
                     st.warning("⚠️ Telegram configurations are missing.")
 
+        st.markdown("<hr style='border-color: rgba(255,255,255,0.08);'>", unsafe_allow_html=True)
+        st.markdown("### 👤 Registered Operators Management")
+        
+        try:
+            users_list = User.get_all()
+        except Exception as e:
+            users_list = []
+            st.error(f"Failed to fetch operator accounts: {e}")
+            
+        if users_list:
+            for u in users_list:
+                col_u1, col_u2, col_u3 = st.columns([2, 2, 1])
+                with col_u1:
+                    st.markdown(f"**Operator**: `{u['username']}` (ID: #{u['id']})")
+                with col_u2:
+                    st.markdown(f"**Email**: `{u['email']}`")
+                with col_u3:
+                    if u['id'] == st.session_state.user.id:
+                        st.markdown("<span style='color: #00b894; font-weight:600;'>Active Session</span>", unsafe_allow_html=True)
+                    else:
+                        if st.button("Delete Account", key=f"del_u_{u['id']}", use_container_width=True):
+                            if User.delete(u['id']):
+                                st.success(f"Operator '{u['username']}' deleted.")
+                                time.sleep(1.0)
+                                st.rerun()
+                            else:
+                                st.error("Failed to delete account.")
+        else:
+            st.info("No operator accounts registered.")
+
     # 5. Handle Auto Refresh Rerun Trigger
     if refresh_enabled:
         time.sleep(5)
