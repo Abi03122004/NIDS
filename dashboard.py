@@ -23,10 +23,26 @@ st.set_page_config(
 # Pure Streamlit application (Flask removed). Ingestion writes directly to SQLite.
 
 # Import models and engines (since they share the same SQLite database)
-from database import get_statistics, get_history, DB_PATH, get_incidents, resolve_stale_incidents
+from database import get_statistics, get_history, DB_PATH, get_incidents, resolve_stale_incidents, init_db
 from user_model import User
 from severity_engine import evaluate_threat_state
 from notification_engine import load_config, save_config, send_telegram_message, send_email_message
+
+# Auto-initialize database if users table is missing (to prevent Render 500 errors)
+def check_db_initialized():
+    import sqlite3
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("SELECT 1 FROM users LIMIT 1")
+        conn.close()
+    except sqlite3.OperationalError:
+        try:
+            init_db()
+        except Exception:
+            pass
+
+check_db_initialized()
 
 # Initialize session state variables
 if "logged_in" not in st.session_state:
