@@ -78,6 +78,8 @@ def is_sniffer_running() -> bool:
 
 def start_sniffer() -> bool:
     """Spawns the live_sniffer.py script in the background."""
+    if os.environ.get("RENDER"):
+        return False
     base_dir = os.path.dirname(os.path.abspath(__file__))
     log_dir = os.path.join(base_dir, "logs")
     os.makedirs(log_dir, exist_ok=True)
@@ -267,8 +269,9 @@ elif not st.session_state.logged_in and st.session_state.register_mode:
 # VIEW: Protected SOC Dashboard
 # -------------------------------------------------------------
 else:
-    # Auto-start sniffer if not running, not explicitly stopped, and not already tried
-    if not is_sniffer_running() and not st.session_state.explicitly_stopped and not st.session_state.auto_started:
+    # Auto-start sniffer if not running, not explicitly stopped, and not already tried (skip on Render to save memory)
+    is_render = os.environ.get("RENDER") is not None
+    if not is_render and not is_sniffer_running() and not st.session_state.explicitly_stopped and not st.session_state.auto_started:
         start_sniffer()
         st.session_state.auto_started = True
 
@@ -308,14 +311,18 @@ else:
                 time.sleep(1.0)
                 st.rerun()
         else:
-            if st.button("🚀 Start Live Analysis", use_container_width=True, key="sidebar_start_sniffer"):
-                start_sniffer()
-                st.session_state.explicitly_stopped = False
-                st.session_state.auto_started = True
-                st.success("Launching sniffer...")
-                time.sleep(1.5)
-                st.rerun()
-            st.warning("⚠️ Run terminal/Streamlit as Administrator to allow live sniffing.")
+            is_render = os.environ.get("RENDER") is not None
+            if is_render:
+                st.info("ℹ️ Live Sniffer is disabled on Render to prevent memory limit crashes.")
+            else:
+                if st.button("🚀 Start Live Analysis", use_container_width=True, key="sidebar_start_sniffer"):
+                    start_sniffer()
+                    st.session_state.explicitly_stopped = False
+                    st.session_state.auto_started = True
+                    st.success("Launching sniffer...")
+                    time.sleep(1.5)
+                    st.rerun()
+                st.warning("⚠️ Run terminal/Streamlit as Administrator to allow live sniffing.")
             
         st.markdown("<hr style='border-color: rgba(255,255,255,0.08);'>", unsafe_allow_html=True)
         
@@ -350,19 +357,27 @@ else:
     # Critical Warning if Live Sniffer is Offline
     if not sniffer_active:
         col_warn_text, col_warn_btn = st.columns([4, 1])
+        is_render = os.environ.get("RENDER") is not None
         with col_warn_text:
-            st.error(
-                "🚨 **CRITICAL NOTICE: Live Network Sniffer is Offline.**  \n"
-                "The background packet capture agent is currently inactive. Visualized charts are based on historical data only."
-            )
+            if is_render:
+                st.info(
+                    "ℹ️ **NOTICE: Live Sniffer is offline (Disabled in Cloud Sandbox).**  \n"
+                    "Live network sniffing is disabled in the Render cloud container due to privilege and memory limits. Showing historical data."
+                )
+            else:
+                st.error(
+                    "🚨 **CRITICAL NOTICE: Live Network Sniffer is Offline.**  \n"
+                    "The background packet capture agent is currently inactive. Visualized charts are based on historical data only."
+                )
         with col_warn_btn:
-            if st.button("Analyse Live Traffic", use_container_width=True, key="main_panel_start_sniffer"):
-                start_sniffer()
-                st.session_state.explicitly_stopped = False
-                st.session_state.auto_started = True
-                st.success("Starting sniffer...")
-                time.sleep(1.5)
-                st.rerun()
+            if not is_render:
+                if st.button("Analyse Live Traffic", use_container_width=True, key="main_panel_start_sniffer"):
+                    start_sniffer()
+                    st.session_state.explicitly_stopped = False
+                    st.session_state.auto_started = True
+                    st.success("Starting sniffer...")
+                    time.sleep(1.5)
+                    st.rerun()
 
     # 1. Dynamic Glowing Threat Banner
     colors = {
