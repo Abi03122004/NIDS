@@ -1,0 +1,42 @@
+[
+  {
+    "id": "SIG-001",
+    "name": "Deprecated Telnet Connection",
+    "type": "port",
+    "protocol": "TCP",
+    "port": 23,
+    "severity": "MEDIUM",
+    "attack_type": "PortScan",
+    "description": "Insecure Telnet traffic detected on port 23."
+  },
+  {
+    "id": "SIG-002",
+    "name": "SQL Injection Attempt",
+    "type": "payload",
+    "protocol": "TCP",
+    "pattern": "union select",
+    "severity": "HIGH",
+    "attack_type": "Web Attack",
+    "description": "SQL Injection payload signature 'union select' detected."
+  },
+  {
+    "id": "SIG-003",
+    "name": "Path Traversal Attempt",
+    "type": "payload",
+    "protocol": "TCP",
+    "pattern": "../",
+    "severity": "HIGH",
+    "attack_type": "Web Attack",
+    "description": "Directory traversal payload signature '../' detected."
+  },
+  {
+    "id": "SIG-004",
+    "name": "Deprecated FTP Connection",
+    "type": "port",
+    "protocol": "TCP",
+    "port": 21,
+    "severity": "MEDIUM",
+    "attack_type": "PortScan",
+    "description": "Insecure FTP traffic detected on port 21."
+  }
+]

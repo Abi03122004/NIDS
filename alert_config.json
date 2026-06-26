@@ -1,0 +1,15 @@
+{
+  "email": {
+    "smtp_server": "smtp.gmail.com",
+    "smtp_port": 587,
+    "sender_email": "",
+    "sender_password": "",
+    "recipient_email": "",
+    "enabled": false
+  },
+  "telegram": {
+    "bot_token": "",
+    "chat_id": "",
+    "enabled": false
+  }
+}

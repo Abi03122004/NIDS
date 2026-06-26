@@ -1,0 +1,11 @@
+{
+  "name": "network-ids",
+  "version": "1.0.0",
+  "description": "Network Intrusion Detection System Streamlit Dashboard",
+  "main": "dashboard.py",
+  "scripts": {
+    "dev": "streamlit run dashboard.py"
+  },
+  "author": "Operator",
+  "license": "ISC"
+}
