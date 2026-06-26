@@ -128,6 +128,7 @@ def get_history(
     offset: int = 0,
     prediction: Optional[str] = None,
     severity: Optional[str] = None,
+    since_timestamp: Optional[str] = None,
     db_path: str = DB_PATH
 ) -> List[Dict[str, Any]]:
     """Retrieves sorted, paginated records with detailed IP metadata."""
@@ -147,6 +148,10 @@ def get_history(
         conditions.append("severity = ?")
         params.append(severity.upper())
         
+    if since_timestamp:
+        conditions.append("timestamp >= ?")
+        params.append(since_timestamp)
+        
     if conditions:
         query += " WHERE " + " AND ".join(conditions)
         
@@ -159,7 +164,7 @@ def get_history(
         rows = cursor.fetchall()
         return [dict(row) for row in rows]
 
-def get_statistics(db_path: str = DB_PATH) -> Dict[str, Any]:
+def get_statistics(since_timestamp: Optional[str] = None, db_path: str = DB_PATH) -> Dict[str, Any]:
     """Computes aggregated traffic metrics, hybrid methods breakdown, and top attacker IPs."""
     stats = {
         "total_records": 0,
@@ -177,8 +182,15 @@ def get_statistics(db_path: str = DB_PATH) -> Dict[str, Any]:
     with get_connection(db_path) as conn:
         cursor = conn.cursor()
         
+        # Determine query filters and params
+        where_clause = ""
+        params = []
+        if since_timestamp:
+            where_clause = " WHERE timestamp >= ?"
+            params = [since_timestamp]
+            
         # 1. Total records and min/max timestamps
-        cursor.execute("SELECT COUNT(*), MIN(timestamp), MAX(timestamp) FROM predictions")
+        cursor.execute(f"SELECT COUNT(*), MIN(timestamp), MAX(timestamp) FROM predictions{where_clause}", params)
         total, min_ts, max_ts = cursor.fetchone()
         stats["total_records"] = total
         stats["first_record_time"] = min_ts
@@ -188,45 +200,53 @@ def get_statistics(db_path: str = DB_PATH) -> Dict[str, Any]:
             return stats
             
         # 2. Prediction class breakdown
-        cursor.execute("SELECT prediction, COUNT(*) FROM predictions GROUP BY prediction")
+        cursor.execute(f"SELECT prediction, COUNT(*) FROM predictions{where_clause} GROUP BY prediction", params)
         stats["class_distribution"] = {row[0]: row[1] for row in cursor.fetchall()}
         
         # 3. Severity breakdown
-        cursor.execute("SELECT severity, COUNT(*) FROM predictions GROUP BY severity")
+        cursor.execute(f"SELECT severity, COUNT(*) FROM predictions{where_clause} GROUP BY severity", params)
         stats["severity_distribution"] = {row[0]: row[1] for row in cursor.fetchall()}
         
         # 4. Average latency
-        cursor.execute("SELECT AVG(latency_ms) FROM predictions")
+        cursor.execute(f"SELECT AVG(latency_ms) FROM predictions{where_clause}", params)
         avg_lat = cursor.fetchone()[0]
         stats["average_latency_ms"] = float(avg_lat) if avg_lat is not None else 0.0
         
         # 5. Total imputed features
-        cursor.execute("SELECT SUM(imputed_count) FROM predictions")
+        cursor.execute(f"SELECT SUM(imputed_count) FROM predictions{where_clause}", params)
         sum_imp = cursor.fetchone()[0]
         stats["total_imputed_features"] = int(sum_imp) if sum_imp is not None else 0
         
         # 6. Attack rate in the last hour
         one_hour_ago = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+        if since_timestamp:
+            query_time = max(one_hour_ago, since_timestamp)
+        else:
+            query_time = one_hour_ago
         cursor.execute(
             "SELECT COUNT(*) FROM predictions WHERE prediction != 'BENIGN' AND timestamp >= ?",
-            (one_hour_ago,)
+            (query_time,)
         )
         stats["attacks_last_hour"] = cursor.fetchone()[0]
         
         # 7. Detection method breakdown
-        cursor.execute("SELECT detection_method, COUNT(*) FROM predictions GROUP BY detection_method")
+        cursor.execute(f"SELECT detection_method, COUNT(*) FROM predictions{where_clause} GROUP BY detection_method", params)
         for row in cursor.fetchall():
             stats["detection_method_breakdown"][row[0]] = row[1]
             
         # 8. Top 5 attacking IPs (excluding BENIGN predictions)
-        cursor.execute("""
+        top_attacker_query = """
             SELECT src_ip, COUNT(*) as cnt 
             FROM predictions 
-            WHERE prediction != 'BENIGN' 
-            GROUP BY src_ip 
-            ORDER BY cnt DESC 
-            LIMIT 5
-        """)
+            WHERE prediction != 'BENIGN'
+        """
+        top_attacker_params = []
+        if since_timestamp:
+            top_attacker_query += " AND timestamp >= ?"
+            top_attacker_params.append(since_timestamp)
+        top_attacker_query += " GROUP BY src_ip ORDER BY cnt DESC LIMIT 5"
+        
+        cursor.execute(top_attacker_query, top_attacker_params)
         stats["top_attackers"] = [{"src_ip": row[0], "count": row[1]} for row in cursor.fetchall()]
         
     return stats

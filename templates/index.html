@@ -406,6 +406,7 @@
 
     <!-- Web Console JS Scripts -->
     <script>
+        const sessionLoginTime = "{{ login_time }}";
         let socket;
         let timelineChart, pieChart, severityChart, methodChart;
         let timeBuckets = {};
@@ -438,6 +439,7 @@
             
             // New Network Flow received
             socket.on("new_flow", (data) => {
+                if (sessionLoginTime && data.timestamp < sessionLoginTime) return;
                 logConsole(`[Flow Log] #${data.id} ${data.src_ip} -> ${data.prediction} (${data.confidence * 100}%)`);
                 appendTrafficRow(data);
                 updateChartsWithNewFlow(data);
@@ -446,6 +448,7 @@
             
             // New active incident captured
             socket.on("new_incident", (data) => {
+                if (sessionLoginTime && data.last_update < sessionLoginTime) return;
                 logConsole(`[ALERT] ACTIVE INCIDENT: Potential ${data.attack_type} attack ongoing from ${data.src_ip}!`);
                 updateActiveIncidentUI(data);
                 fetchStats();

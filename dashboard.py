@@ -1,6 +1,3 @@
-# dashboard.py
-# Real-time Flask + SocketIO Web SOC Portal for Network Intrusion Detection System (NIDS)
-
 import os
 import sys
 import time
@@ -40,7 +37,7 @@ check_db_initialized()
 # Initialize Flask and SocketIO
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", secrets.token_hex(24))
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode="eventlet")
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading")
 
 # Bind SocketIO instance to background threads to allow direct broadcasts
 live_sniffer.socketio_instance = socketio
@@ -71,8 +68,9 @@ def index():
     # Check if sniffer is running (heartbeat check)
     sniffer_active = live_sniffer.sniffer_instance is not None and live_sniffer.sniffer_instance.running
     is_render = "RENDER" in os.environ
+    login_time = session.get("login_time")
     
-    return render_template("index.html", user=user, is_admin=is_admin, sniffer_active=sniffer_active, is_render=is_render)
+    return render_template("index.html", user=user, is_admin=is_admin, sniffer_active=sniffer_active, is_render=is_render, login_time=login_time)
 
 @app.route("/login", methods=["GET", "POST"])
 def login():
@@ -96,6 +94,7 @@ def login():
                 error = "Invalid password."
             else:
                 session["user_id"] = user.id
+                session["login_time"] = datetime.now(timezone.utc).isoformat()
                 return redirect(url_for("index"))
                 
     return render_template("login.html", error=error, email_val=email_val)
@@ -127,6 +126,7 @@ def register():
                 user_id = User.create(username_val, email_val, password)
                 if user_id:
                     session["user_id"] = user_id
+                    session["login_time"] = datetime.now(timezone.utc).isoformat()
                     return redirect(url_for("index"))
                 else:
                     error = "Registration failed. Try again."
@@ -136,6 +136,7 @@ def register():
 @app.route("/logout")
 def logout():
     session.pop("user_id", None)
+    session.pop("login_time", None)
     return redirect(url_for("login"))
 
 # -------------------------------------------------------------
@@ -145,9 +146,12 @@ def logout():
 def api_stats():
     if not get_current_user():
         return jsonify({"error": "Unauthorized"}), 401
-    stats = get_statistics()
+    login_time = session.get("login_time")
+    stats = get_statistics(since_timestamp=login_time)
     threat_level, alerts = evaluate_threat_state()
     active_incidents = incident_manager.get_active_incidents()
+    if login_time:
+        active_incidents = [inc for inc in active_incidents if inc["last_update"] >= login_time]
     
     return jsonify({
         "stats": stats,
@@ -160,7 +164,8 @@ def api_history():
     if not get_current_user():
         return jsonify({"error": "Unauthorized"}), 401
     limit = request.args.get("limit", default=50, type=int)
-    history = get_history(limit=limit)
+    login_time = session.get("login_time")
+    history = get_history(limit=limit, since_timestamp=login_time)
     return jsonify(history)
 
 @app.route("/api/incidents")
@@ -168,8 +173,14 @@ def api_incidents():
     if not get_current_user():
         return jsonify({"error": "Unauthorized"}), 401
         
+    login_time = session.get("login_time")
     active = incident_manager.get_active_incidents()
     resolved = get_incidents("RESOLVED", limit=20)
+    
+    if login_time:
+        active = [inc for inc in active if inc["last_update"] >= login_time]
+        resolved = [inc for inc in resolved if inc["last_update"] >= login_time]
+        
     return jsonify({
         "active": active,
         "resolved": resolved
@@ -350,4 +361,4 @@ if __name__ == "__main__":
             
     port = int(os.environ.get("PORT", 8501))
     print(f"[*] Starting SOC Web Portal on http://localhost:{port}")
-    socketio.run(app, host="0.0.0.0", port=port, debug=False)
+    socketio.run(app, host="0.0.0.0", port=port, debug=False, allow_unsafe_werkzeug=True)
