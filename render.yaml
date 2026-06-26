@@ -3,7 +3,7 @@ services:
     name: network-ids-portal
     runtime: python
     buildCommand: pip install -r requirements.txt
-    startCommand: streamlit run dashboard.py --server.port $PORT --server.address 0.0.0.0
+    startCommand: python dashboard.py
     envVars:
       - key: SECRET_KEY
         generateValue: true

@@ -7,3 +7,5 @@ scapy
 streamlit
 plotly
 Werkzeug
+Flask-SocketIO
+eventlet

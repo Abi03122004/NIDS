@@ -1,10 +1,10 @@
 # live_sniffer.py
-# Real-time network packet sniffer and flow feature extractor using Scapy
+# Real-time network packet sniffer and flow feature extractor using Scapy (Async version)
 
 import os
 import sys
 import time
-import argparse
+import queue
 import threading
 import joblib
 import numpy as np
@@ -18,22 +18,30 @@ except ImportError:
     sys.exit(1)
 
 # Local imports for in-memory ML inference and SQLite logging
-from ml_model import predict_single
+from ml_model import predict_single, load_assets
 from database import log_prediction, init_db, get_severity
 from severity_engine import evaluate_threat_state
 from notification_engine import dispatch_alert
 from signature_engine import match_port_signature, match_payload_signature
 from incident_manager import process_anomaly
 
-# Configuration settings
-TIMEOUT_FLOW = 5.0  # Seconds of inactivity before flushing a flow
-CLEANUP_INTERVAL = 1.0  # How often to check for timed-out flows
+# Flow aging timeouts
+TIMEOUT_TCP = 30.0
+TIMEOUT_UDP = 10.0
+CLEANUP_INTERVAL = 1.0
 
-# Global structures to track active flows
+# Global structures
 active_flows = {}
 flow_lock = threading.Lock()
 features_list = None
-stop_sniffing = False
+
+# Async threads and queues
+inference_queue = queue.Queue()
+sniffer_instance = None
+worker_thread = None
+cleanup_thread = None
+stop_sniffer_event = threading.Event()
+socketio_instance = None
 
 class NetworkFlow:
     """Tracks state and aggregates packets for a single bidirectional network flow."""
@@ -48,9 +56,8 @@ class NetworkFlow:
         self.first_timestamp = time.time()
         self.last_timestamp = self.first_timestamp
         
-        # Directions: Forward is src_ip -> dst_ip, Backward is dst_ip -> src_ip
-        self.fwd_packets = []  # List of sizes (int)
-        self.bwd_packets = []  # List of sizes (int)
+        self.fwd_packets = []
+        self.bwd_packets = []
         
         self.fwd_timestamps = []
         self.bwd_timestamps = []
@@ -63,7 +70,6 @@ class NetworkFlow:
         self.init_win_bwd = 0
         self.min_seg_size_fwd = 0
         
-        # Idle/Active calculation
         self.last_active_time = self.first_timestamp
         self.active_periods = []
         self.idle_periods = []
@@ -74,32 +80,27 @@ class NetworkFlow:
         current_time = time.time()
         pkt_len = len(packet)
         
-        # Idle/Active times detection (1.0s gap threshold)
         gap = current_time - self.last_active_time
         if gap > 1.0:
-            # We had an idle period
-            self.idle_periods.append(gap * 1000.0)  # Store in ms
+            self.idle_periods.append(gap * 1000.0)
             active_duration = self.last_active_time - self.first_timestamp if not self.active_periods else self.last_active_time - (self.first_timestamp + sum(self.idle_periods)/1000.0)
             if active_duration > 0:
                 self.active_periods.append(active_duration * 1000.0)
-            self.first_timestamp = current_time  # Reset base for next active calculation
+            self.first_timestamp = current_time
             
         self.last_active_time = current_time
         self.last_timestamp = current_time
         
-        # Extract IP header length
         ip_header_len = 20
         if packet.haslayer(scapy.IP):
             ip_header_len = packet[scapy.IP].ihl * 4
 
-        # Extract Transport Layer Info
         transport_header_len = 0
         if packet.haslayer(scapy.TCP):
             tcp_layer = packet[scapy.TCP]
             transport_header_len = tcp_layer.dataofs * 4
             self.tcp_flags.append(str(tcp_layer.flags))
             
-            # Check Initial Window Bytes
             if direction == "fwd" and not self.fwd_packets:
                 self.init_win_fwd = tcp_layer.window
                 self.min_seg_size_fwd = transport_header_len
@@ -120,7 +121,6 @@ class NetworkFlow:
             self.bwd_timestamps.append(current_time)
             self.bwd_header_len += total_header_len
 
-        # Check DNS tunneling signature (if not already matched)
         if not self.matched_signature and packet.haslayer(scapy.DNS):
             try:
                 from signature_engine import inspect_dns_tunneling
@@ -130,7 +130,6 @@ class NetworkFlow:
             except Exception:
                 pass
 
-        # Check payload signature (if not already matched, only on unencrypted / inspectable ports)
         inspectable_ports = {80, 8080, 53, 21, 23, 25, 110, 143}
         if not self.matched_signature and packet.haslayer(scapy.Raw):
             if (self.dst_port in inspectable_ports or self.src_port in inspectable_ports):
@@ -147,7 +146,7 @@ class NetworkFlow:
         """Computes and returns the 78 flow features mapping to the CICIDS2017 set."""
         duration_sec = self.last_timestamp - self.first_timestamp
         duration_ms = duration_sec * 1000.0
-        duration_us = duration_sec * 1000000.0  # Flow Duration in microseconds
+        duration_us = duration_sec * 1000000.0
         if duration_sec <= 0:
             duration_sec = 0.00001
             duration_us = 10.0
@@ -170,18 +169,14 @@ class NetworkFlow:
         bwd_max = max(self.bwd_packets) if bwd_cnt else 0.0
         bwd_min = min(self.bwd_packets) if bwd_cnt else 0.0
         
-        # Inter-arrival times (IAT)
         all_timestamps = sorted(self.fwd_timestamps + self.bwd_timestamps)
         flow_iats = np.diff(all_timestamps) * 1000000.0 if len(all_timestamps) > 1 else []
         fwd_iats = np.diff(self.fwd_timestamps) * 1000000.0 if len(self.fwd_timestamps) > 1 else []
         bwd_iats = np.diff(self.bwd_timestamps) * 1000000.0 if len(self.bwd_timestamps) > 1 else []
         
         all_packets = self.fwd_packets + self.bwd_packets
-        
-        # Calculate TCP Flags counts
         flags_str = "".join(self.tcp_flags)
         
-        # Helper to compute Active/Idle statistics
         def get_stats(periods):
             if not periods:
                 return 0.0, 0.0, 0.0, 0.0
@@ -190,7 +185,6 @@ class NetworkFlow:
         act_mean, act_std, act_max, act_min = get_stats(self.active_periods)
         idl_mean, idl_std, idl_max, idl_min = get_stats(self.idle_periods)
 
-        # Build feature dictionary
         features = {
             "Destination Port": float(self.dst_port),
             "Flow Duration": float(duration_us),
@@ -223,7 +217,7 @@ class NetworkFlow:
             "Bwd IAT Max": float(max(bwd_iats) if len(bwd_iats) else 0.0),
             "Bwd IAT Min": float(min(bwd_iats) if len(bwd_iats) else 0.0),
             "Fwd PSH Flags": float(flags_str.count("P")),
-            "Bwd PSH Flags": 0.0,  # Rarely tracked separately in flows
+            "Bwd PSH Flags": 0.0,
             "Fwd URG Flags": float(flags_str.count("U")),
             "Bwd URG Flags": 0.0,
             "Fwd Header Length": float(self.fwd_header_len),
@@ -274,12 +268,10 @@ class NetworkFlow:
         return features
 
 def extract_and_send_flow(flow: NetworkFlow):
-    """Computes features for the finished flow, predicts threat locally, and logs to database."""
-    # Ensure the flow has packets to avoid dividing empty lists
+    """Computes features for the finished flow, predicts threat, and logs to database."""
     if not flow.fwd_packets and not flow.bwd_packets:
         return
         
-    # 1. Check for signatures (Payload signatures checked during add_packet; check Port signatures now)
     sig = flow.matched_signature
     if not sig:
         proto_name = "TCP" if flow.protocol == 6 else "UDP"
@@ -287,7 +279,6 @@ def extract_and_send_flow(flow: NetworkFlow):
         
     is_signature_match = sig is not None
     
-    # Initialize variables for prediction/logging
     pred = "BENIGN"
     conf = 1.0
     latency = 0.0
@@ -305,7 +296,6 @@ def extract_and_send_flow(flow: NetworkFlow):
         latency = 0.0
         imputed_count = 0
     else:
-        # 2. Run Random Forest Behavioral Engine if no signature matches
         try:
             flow_features = flow.get_features()
             payload_vector = []
@@ -325,9 +315,8 @@ def extract_and_send_flow(flow: NetworkFlow):
             print(f"[ERROR] Local flow classification failed: {e}")
             return
             
-    # 3. Log to SQLite directly
     try:
-        log_prediction(
+        row_id = log_prediction(
             prediction=pred,
             confidence=float(conf),
             latency_ms=float(latency),
@@ -341,7 +330,21 @@ def extract_and_send_flow(flow: NetworkFlow):
             details=details
         )
         
-        # 4. Aggregate anomaly into an incident and trigger notifications (if non-BENIGN)
+        # Broadcast via WebSockets
+        if socketio_instance:
+            socketio_instance.emit("new_flow", {
+                "id": row_id,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "src_ip": flow.src_ip,
+                "dst_ip": flow.dst_ip,
+                "dst_port": flow.dst_port,
+                "prediction": pred,
+                "severity": severity,
+                "confidence": float(conf),
+                "detection_method": det_method,
+                "details": details
+            })
+        
         if pred != "BENIGN":
             process_anomaly(
                 src_ip=flow.src_ip,
@@ -350,12 +353,9 @@ def extract_and_send_flow(flow: NetworkFlow):
                 severity=severity,
                 dst_port=flow.dst_port
             )
-            
-        # Print status to terminal
-        if pred == "BENIGN":
-            print(f"[*] FLOW {flow.src_ip}:{flow.src_port} -> {flow.dst_ip}:{flow.dst_port} | Method: {det_method} | Prediction: BENIGN")
-        else:
             print(f"[ALERT] [{det_method}] {pred.upper()} threat detected on flow {flow.src_ip} -> {flow.dst_ip}!")
+        else:
+            print(f"[*] FLOW {flow.src_ip}:{flow.src_port} -> {flow.dst_ip}:{flow.dst_port} | Method: {det_method} | Prediction: BENIGN")
             
     except Exception as e:
         print(f"[ERROR] Ingestion logging failed: {e}")
@@ -382,32 +382,40 @@ def packet_callback(packet):
         is_fin = False
         is_rst = False
         
-    # Generate a bidirectional flow key (sorted IPs and ports to group fwd/bwd packets together)
     flow_key = tuple(sorted([(src_ip, src_port), (dst_ip, dst_port)]) + [proto])
-    
     direction = "fwd" if (src_ip == flow_key[0][0] and src_port == flow_key[0][1]) else "bwd"
     
     with flow_lock:
         if flow_key not in active_flows:
-            # Create new flow (dst_port should generally be the server destination port)
             active_flows[flow_key] = NetworkFlow(src_ip, src_port, dst_ip, dst_port, proto)
             
         flow = active_flows[flow_key]
         flow.add_packet(packet, direction)
         
-        # If TCP flow is closed (FIN or RST), flush it immediately for fast analysis
+        # Flush TCP immediately on close to minimize latency
         if is_fin or is_rst:
             active_flows.pop(flow_key)
-            threading.Thread(target=extract_and_send_flow, args=(flow,), daemon=True).start()
+            inference_queue.put(flow)
 
-def cleanup_expired_flows():
-    """Background thread that flushes flows that haven't received packets for TIMEOUT_FLOW seconds."""
-    global stop_sniffing
-    while not stop_sniffing:
+def inference_worker_loop():
+    """Worker loop consuming flows from queue and running ML predictions in the background thread."""
+    while not stop_sniffer_event.is_set():
+        try:
+            flow = inference_queue.get(timeout=1.0)
+            extract_and_send_flow(flow)
+            inference_queue.task_done()
+        except queue.Empty:
+            continue
+        except Exception as e:
+            print(f"[ERROR] Inference worker failed: {e}")
+
+def cleanup_expired_flows_loop():
+    """Periodic cleaner checking for aged flows (TCP > 30s, UDP > 10s idle) and evicting them to the queue."""
+    while not stop_sniffer_event.is_set():
         time.sleep(CLEANUP_INTERVAL)
         current_time = time.time()
         
-        # Write heartbeat timestamp to file
+        # Heartbeat sync
         try:
             base_dir = os.path.dirname(os.path.abspath(__file__))
             hb_path = os.path.join(base_dir, "logs", "sniffer.heartbeat")
@@ -417,93 +425,106 @@ def cleanup_expired_flows():
         except Exception:
             pass
             
-        # Check for stop signal file
-        try:
-            base_dir = os.path.dirname(os.path.abspath(__file__))
-            stop_path = os.path.join(base_dir, "logs", "sniffer.stop")
-            if os.path.exists(stop_path):
-                print("[*] Stop signal detected. Exiting sniffer...")
-                stop_sniffing = True
-                try:
-                    os.remove(stop_path)
-                except Exception:
-                    pass
-                # Delete heartbeat file on clean exit
-                try:
-                    os.remove(hb_path)
-                except Exception:
-                    pass
-                os._exit(0)
-        except Exception:
-            pass
-
         expired = []
         with flow_lock:
-            for key, flow in active_flows.items():
-                if current_time - flow.last_timestamp > TIMEOUT_FLOW:
+            for key, flow in list(active_flows.items()):
+                timeout = TIMEOUT_TCP if flow.protocol == 6 else TIMEOUT_UDP
+                if current_time - flow.last_timestamp > timeout:
                     expired.append(key)
                     
             for key in expired:
                 flow = active_flows.pop(key)
-                threading.Thread(target=extract_and_send_flow, args=(flow,), daemon=True).start()
+                inference_queue.put(flow)
 
-def main():
-    global features_list, stop_sniffing
+def start_sniffer_thread(interface=None):
+    """Spawns AsyncSniffer, worker, and cleanup threads. Used inside Flask server."""
+    global sniffer_instance, worker_thread, cleanup_thread, features_list, stop_sniffer_event
     
-    parser = argparse.ArgumentParser(description="Live Real-time NIDS Network Packet Sniffer")
-    parser.add_argument("--iface", type=str, default=None, help="Network interface to sniff on (e.g. Wi-Fi, Ethernet)")
-    args = parser.parse_args()
+    if os.environ.get("RENDER"):
+        print("[*] Skipping sniffer start: disabled inside cloud container sandbox.")
+        return False
+        
+    stop_sniffer_event.clear()
     
-    # Load features list
+    # Load ML assets
+    try:
+        load_assets()
+        print("[*] Local ML assets loaded successfully.")
+    except Exception as e:
+        print(f"[ERROR] Could not load ML assets: {e}")
+        return False
+        
     if not os.path.exists("features.pkl"):
-        print("[ERROR] features.pkl is missing from directory. Cannot map flow vectors correctly.")
-        sys.exit(1)
+        print("[ERROR] features.pkl is missing from root.")
+        return False
     features_list = joblib.load("features.pkl")
     
-    # Check Npcap on Windows
-    if sys.platform.startswith("win"):
-        # Scapy uses conf.use_pcap to detect pcap availability
-        if not scapy.conf.use_pcap:
-            print(
-                "[WARNING] Npcap/WinPcap does not appear to be installed on your Windows device.\n"
-                "To capture live network traffic, please download and install Npcap from: https://npcap.com/\n"
-                "If it's already installed, try running your command line as Administrator.\n"
-            )
-            
-    # Start cleanup background thread
-    cleanup_thread = threading.Thread(target=cleanup_expired_flows, daemon=True)
+    # Start consumer thread
+    worker_thread = threading.Thread(target=inference_worker_loop, daemon=True)
+    worker_thread.start()
+    
+    # Start cleanup thread
+    cleanup_thread = threading.Thread(target=cleanup_expired_flows_loop, daemon=True)
     cleanup_thread.start()
     
-    # Verify local ML assets
-    try:
-        from ml_model import load_assets
-        load_assets()
-        print("[*] Successfully loaded RandomForest classifier locally! Model is online.")
-    except Exception as e:
-        print(f"[ERROR] Could not load local model assets: {e}")
-        sys.exit(1)
-        
-    # Verify database initialization
-    try:
-        init_db()
-        print("[*] Local database initialized and verified.")
-    except Exception as e:
-        print(f"[WARNING] Database check failed: {e}")
-        
-    interface = args.iface or scapy.conf.iface
-    print(f"[*] Starting live packet sniffing on adapter: {interface}")
-    print("[*] Capturing TCP/UDP packets. Press Ctrl+C to stop...\n")
+    # Set default interface if none specified
+    iface = interface or scapy.conf.iface
+    print(f"[*] Starting AsyncSniffer on adapter: {iface}")
     
     try:
-        # Sniff packets continuously
-        scapy.sniff(iface=interface, filter="ip and (tcp or udp)", prn=packet_callback, store=0)
-    except KeyboardInterrupt:
-        print("\n[*] Sniffing stopped by user.")
+        sniffer_instance = scapy.AsyncSniffer(
+            iface=iface,
+            filter="ip and (tcp or udp)",
+            prn=packet_callback,
+            store=0
+        )
+        sniffer_instance.start()
+        return True
     except Exception as e:
-        print(f"\n[ERROR] An error occurred during packet capture: {e}")
-        print("Please run your terminal as Administrator/root if you encountered a permissions error.")
-    finally:
-        stop_sniffing = True
+        print(f"[ERROR] AsyncSniffer failed to start: {e}")
+        stop_sniffer_event.set()
+        return False
+
+def stop_sniffer_thread():
+    """Gracefully terminates background sniffing threads."""
+    global sniffer_instance, stop_sniffer_event
+    print("[*] Stopping AsyncSniffer background threads...")
+    stop_sniffer_event.set()
+    
+    if sniffer_instance and sniffer_instance.running:
+        try:
+            sniffer_instance.stop()
+        except Exception:
+            pass
+            
+    # Clean up heartbeat file
+    try:
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        hb_path = os.path.join(base_dir, "logs", "sniffer.heartbeat")
+        if os.path.exists(hb_path):
+            os.remove(hb_path)
+    except Exception:
+        pass
+    print("[*] Sniffer threads stopped cleanly.")
+
+def main():
+    """Executable command-line fallback (runs standalone sniffer if executed directly)."""
+    # Initialize DB
+    try:
+        init_db()
+    except Exception:
+        pass
+        
+    success = start_sniffer_thread()
+    if not success:
+        sys.exit(1)
+        
+    try:
+        while True:
+            time.sleep(1.0)
+    except KeyboardInterrupt:
+        stop_sniffer_thread()
+        print("[*] Exit.")
 
 if __name__ == "__main__":
     main()

@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>KryptaFlow NIDS SOC - Sign In</title>
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['Outfit', 'sans-serif'],
+                        mono: ['JetBrains Mono', 'monospace'],
+                    },
+                }
+            }
+        }
+    </script>
+    <style>
+        body {
+            background-color: #05070a;
+            background-image: 
+                radial-gradient(circle at 10% 20%, rgba(9, 132, 227, 0.04) 0%, transparent 40%),
+                radial-gradient(circle at 90% 80%, rgba(214, 48, 49, 0.03) 0%, transparent 45%);
+        }
+        .glass-card {
+            background: rgba(10, 12, 18, 0.8);
+            backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            box-shadow: 0 15px 35px 0 rgba(0, 0, 0, 0.5);
+        }
+    </style>
+</head>
+<body class="text-slate-100 font-sans min-h-screen flex items-center justify-center p-6 antialiased">
+
+    <div class="w-full max-w-md flex flex-col gap-6">
+        <div class="text-center flex flex-col items-center gap-2">
+            <span class="text-4xl">🛡️</span>
+            <h1 class="text-2xl font-extrabold tracking-wider bg-gradient-to-r from-blue-400 to-indigo-400 bg-clip-text text-transparent">
+                KRYPTAFLOW NIDS
+            </h1>
+            <p class="text-xs text-slate-400 font-mono tracking-wider uppercase">Security Operations Center Sign In</p>
+        </div>
+
+        <div class="glass-card p-8 rounded-2xl flex flex-col gap-6">
+            {% if error %}
+            <div class="bg-red-500/10 border border-red-500/20 text-red-400 px-4 py-3 rounded-lg text-sm font-semibold flex items-center gap-2">
+                <span>❌</span>
+                <span>{{ error }}</span>
+            </div>
+            {% endif %}
+
+            <form action="/login" method="POST" class="flex flex-col gap-5">
+                <div class="flex flex-col gap-1.5">
+                    <label for="email" class="text-xs font-semibold text-slate-400 uppercase tracking-wider">Email Address</label>
+                    <input type="email" name="email" id="email" value="{{ email_val }}" required
+                           class="w-full bg-slate-950/80 border border-white/10 rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:border-blue-500 text-slate-100 placeholder-slate-600"
+                           placeholder="operator@security.local">
+                </div>
+
+                <div class="flex flex-col gap-1.5">
+                    <label for="password" class="text-xs font-semibold text-slate-400 uppercase tracking-wider">Password</label>
+                    <input type="password" name="password" id="password" required
+                           class="w-full bg-slate-950/80 border border-white/10 rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:border-blue-500 text-slate-100 placeholder-slate-600"
+                           placeholder="••••••••">
+                </div>
+
+                <button type="submit" 
+                        class="w-full bg-blue-500 hover:bg-blue-600 active:bg-blue-700 text-white font-bold py-3 rounded-lg transition tracking-wide text-sm shadow-lg shadow-blue-500/15">
+                    Sign In
+                </button>
+            </form>
+            
+            <div class="border-t border-white/5 pt-4 text-center">
+                <p class="text-xs text-slate-400">
+                    New Operator? 
+                    <a href="/register" class="text-blue-400 hover:underline font-semibold ml-1">Open Registration Form</a>
+                </p>
+            </div>
+        </div>
+    </div>
+
+</body>
+</html>

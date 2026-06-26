@@ -1,0 +1,1020 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>KryptaFlow NIDS SOC Console</title>
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['Outfit', 'sans-serif'],
+                        mono: ['JetBrains Mono', 'monospace'],
+                    },
+                }
+            }
+        }
+    </script>
+    <!-- HTMX CDN -->
+    <script src="https://unpkg.com/htmx.org@1.9.10"></script>
+    <!-- Socket.IO Client -->
+    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+    <!-- Chart.js CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    
+    <style>
+        body {
+            background-color: #05070a;
+            background-image: 
+                radial-gradient(circle at 10% 20%, rgba(9, 132, 227, 0.03) 0%, transparent 40%),
+                radial-gradient(circle at 90% 80%, rgba(214, 48, 49, 0.02) 0%, transparent 45%);
+        }
+        .glass-panel {
+            background: rgba(10, 12, 18, 0.8);
+            backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+        }
+        .glow-low {
+            border-color: #00b894;
+            box-shadow: 0 0 15px rgba(0, 184, 148, 0.15);
+        }
+        .glow-medium {
+            border-color: #fdcb6e;
+            box-shadow: 0 0 15px rgba(253, 203, 110, 0.15);
+        }
+        .glow-high {
+            border-color: #ff7675;
+            box-shadow: 0 0 15px rgba(255, 118, 117, 0.15);
+        }
+        .glow-critical {
+            border-color: #d63031;
+            box-shadow: 0 0 20px rgba(214, 48, 49, 0.25);
+        }
+        /* Custom scrollbar */
+        ::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+        ::-webkit-scrollbar-track {
+            background: rgba(255, 255, 255, 0.01);
+        }
+        ::-webkit-scrollbar-thumb {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: rgba(255, 255, 255, 0.2);
+        }
+    </style>
+</head>
+<body class="text-slate-100 font-sans min-h-screen flex flex-col antialiased">
+
+    <!-- Top Navigation Bar -->
+    <header class="glass-panel sticky top-0 z-40 border-b border-white/5 py-4 px-6 flex items-center justify-between">
+        <div class="flex items-center gap-3">
+            <span class="text-2xl">🛡️</span>
+            <div>
+                <h1 class="text-xl font-bold tracking-wider bg-gradient-to-r from-blue-400 to-indigo-400 bg-clip-text text-transparent">KRYPTAFLOW NIDS</h1>
+                <p class="text-xs text-slate-400 font-mono">SOC Web Console v2.0</p>
+            </div>
+        </div>
+        
+        <div class="flex items-center gap-6">
+            <div class="flex items-center gap-2 font-mono text-sm bg-slate-900/60 px-3 py-1.5 rounded border border-white/5">
+                <span class="text-slate-400">User:</span>
+                <span class="text-blue-400 font-semibold">{{ user.username }}</span>
+                <span class="text-slate-600">|</span>
+                <span class="text-slate-400">Role:</span>
+                <span class="font-semibold {% if is_admin %}text-purple-400{% else %}text-emerald-400{% endif %}">
+                    {% if is_admin %}Administrator{% else %}Operator{% endif %}
+                </span>
+            </div>
+            
+            <a href="/logout" class="bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/20 hover:border-red-500/30 px-4 py-1.5 rounded transition text-sm font-semibold">
+                Sign Out
+            </a>
+        </div>
+    </header>
+
+    <!-- Main Sidebar + Content Layout -->
+    <div class="flex-1 flex flex-col md:flex-row">
+        <!-- Sidebar Controls -->
+        <aside class="w-full md:w-80 glass-panel md:border-r border-b md:border-b-0 border-white/5 p-6 flex flex-col gap-6">
+            <div>
+                <h3 class="text-xs font-bold tracking-widest text-slate-400 uppercase mb-3">Live Sniffer Status</h3>
+                
+                <!-- Sniffer Status Widget -->
+                <div class="flex items-center justify-between p-3.5 bg-slate-950/60 rounded-lg border border-white/5">
+                    <div class="flex items-center gap-3">
+                        <span id="sniffer-status-indicator" class="relative flex h-3 w-3">
+                            <span class="animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 {% if sniffer_active %}bg-emerald-400{% else %}bg-red-400{% endif %}"></span>
+                            <span class="relative inline-flex rounded-full h-3 w-3 {% if sniffer_active %}bg-emerald-500{% else %}bg-red-500{% endif %}"></span>
+                        </span>
+                        <span id="sniffer-status-text" class="font-semibold text-sm font-mono tracking-wider {% if sniffer_active %}text-emerald-400{% else %}text-red-400{% endif %}">
+                            {% if sniffer_active %}ONLINE{% else %}OFFLINE{% endif %}
+                        </span>
+                    </div>
+                    
+                    {% if not is_render %}
+                    <button id="sniffer-toggle-btn" 
+                            class="px-3 py-1 rounded text-xs font-semibold tracking-wider transition border 
+                            {% if sniffer_active %}bg-red-500/10 hover:bg-red-500/20 text-red-400 border-red-500/20{% else %}bg-blue-500/10 hover:bg-blue-500/20 text-blue-400 border-blue-500/20{% endif %}"
+                            onclick="toggleSniffer()">
+                        {% if sniffer_active %}STOP{% else %}START{% endif %}
+                    </button>
+                    {% endif %}
+                </div>
+                
+                {% if is_render %}
+                <p class="text-xs text-yellow-500/80 mt-2 bg-yellow-500/5 border border-yellow-500/10 p-2 rounded">
+                    ⚠️ Cloud Sniffing is disabled on Render due to raw socket privilege limits and memory constraints.
+                </p>
+                {% endif %}
+            </div>
+            
+            <hr class="border-white/5">
+            
+            <!-- Real-Time Console Logs -->
+            <div class="flex-1 flex flex-col">
+                <h3 class="text-xs font-bold tracking-widest text-slate-400 uppercase mb-3 flex items-center justify-between">
+                    <span>Console Notifications</span>
+                    <span id="socket-connection-badge" class="text-[10px] font-mono font-normal tracking-normal text-red-400 bg-red-400/10 border border-red-400/20 px-1.5 py-0.5 rounded">Disconnected</span>
+                </h3>
+                
+                <div id="console-logs" class="flex-1 min-h-[160px] max-h-[300px] md:max-h-none overflow-y-auto bg-slate-950/80 border border-white/5 rounded-lg p-3 font-mono text-[11px] text-slate-300 leading-relaxed flex flex-col gap-1.5">
+                    <div class="text-slate-500">[*] WebSockets listener initializing...</div>
+                </div>
+            </div>
+        </aside>
+
+        <!-- Main Dashboard Workspace -->
+        <main class="flex-1 p-6 overflow-y-auto flex flex-col gap-6">
+            <!-- 1. Dynamic Glowing Threat Banner -->
+            <div id="threat-banner" class="glass-panel border px-5 py-3.5 rounded-lg font-bold text-sm tracking-wider flex justify-between items-center transition-all duration-500 glow-low text-emerald-400">
+                <span id="threat-banner-label">SYSTEM THREAT LEVEL: LOW</span>
+                <span id="threat-banner-pill" class="text-xs font-semibold px-2.5 py-1 rounded bg-emerald-500/10 border border-emerald-500/20 uppercase tracking-widest">
+                    🛡️ Healthy Status
+                </span>
+            </div>
+
+            <!-- Tabs Navigation -->
+            <div class="flex border-b border-white/5">
+                <button id="tab-btn-monitoring" onclick="switchTab('monitoring')" class="px-6 py-2.5 font-semibold text-sm border-b-2 border-blue-500 text-blue-400 transition-all duration-200">
+                    🔍 Live Monitoring
+                </button>
+                {% if is_admin %}
+                <button id="tab-btn-settings" onclick="switchTab('settings')" class="px-6 py-2.5 font-semibold text-sm border-b-2 border-transparent text-slate-400 hover:text-slate-200 transition-all duration-200">
+                    ⚙️ Settings & User Management
+                </button>
+                {% endif %}
+            </div>
+
+            <!-- TAB 1: Monitoring Content -->
+            <div id="tab-content-monitoring" class="flex flex-col gap-6">
+                <!-- KPI metrics row -->
+                <div class="grid grid-cols-2 lg:grid-cols-5 gap-4">
+                    <div class="glass-panel p-4 rounded-lg flex flex-col gap-1">
+                        <span class="text-xs text-slate-400 font-semibold tracking-wider uppercase">Total Flows</span>
+                        <span id="metric-total-flows" class="text-2xl font-bold tracking-tight font-mono text-slate-100">0</span>
+                    </div>
+                    <div class="glass-panel p-4 rounded-lg flex flex-col gap-1">
+                        <span class="text-xs text-slate-400 font-semibold tracking-wider uppercase">Active Incidents</span>
+                        <span id="metric-active-incidents" class="text-2xl font-bold tracking-tight font-mono text-red-400">0</span>
+                    </div>
+                    <div class="glass-panel p-4 rounded-lg flex flex-col gap-1">
+                        <span class="text-xs text-slate-400 font-semibold tracking-wider uppercase">Attacks last hour</span>
+                        <span id="metric-attacks-hour" class="text-2xl font-bold tracking-tight font-mono text-amber-500">0</span>
+                    </div>
+                    <div class="glass-panel p-4 rounded-lg flex flex-col gap-1">
+                        <span class="text-xs text-slate-400 font-semibold tracking-wider uppercase">Avg Latency</span>
+                        <span id="metric-avg-latency" class="text-2xl font-bold tracking-tight font-mono text-indigo-400">0.00 ms</span>
+                    </div>
+                    <div class="glass-panel p-4 rounded-lg flex flex-col gap-1 col-span-2 lg:col-span-1">
+                        <span class="text-xs text-slate-400 font-semibold tracking-wider uppercase">Imputed Features</span>
+                        <span id="metric-imputed-features" class="text-2xl font-bold tracking-tight font-mono text-slate-400">0</span>
+                    </div>
+                </div>
+
+                <!-- Charts Section -->
+                <div class="grid grid-cols-1 xl:grid-cols-3 gap-6">
+                    <!-- Flow Timeline Chart -->
+                    <div class="glass-panel p-5 rounded-lg xl:col-span-2 flex flex-col">
+                        <h4 class="text-sm font-semibold tracking-wider text-slate-300 mb-4 uppercase">Captured Flows Timeline</h4>
+                        <div class="relative flex-1 min-h-[260px] flex items-center justify-center">
+                            <canvas id="chart-timeline"></canvas>
+                        </div>
+                    </div>
+                    
+                    <!-- Intrusion Distribution Chart -->
+                    <div class="glass-panel p-5 rounded-lg flex flex-col">
+                        <h4 class="text-sm font-semibold tracking-wider text-slate-300 mb-4 uppercase">Intrusion Distribution</h4>
+                        <div class="relative flex-1 min-h-[260px] flex items-center justify-center">
+                            <canvas id="chart-pie"></canvas>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                    <!-- Severity Level Bar Chart -->
+                    <div class="glass-panel p-5 rounded-lg flex flex-col">
+                        <h4 class="text-sm font-semibold tracking-wider text-slate-300 mb-4 uppercase">Severity Level Analysis</h4>
+                        <div class="relative flex-1 min-h-[220px] flex items-center justify-center">
+                            <canvas id="chart-bar-severity"></canvas>
+                        </div>
+                    </div>
+                    
+                    <!-- Detection Method Chart -->
+                    <div class="glass-panel p-5 rounded-lg flex flex-col">
+                        <h4 class="text-sm font-semibold tracking-wider text-slate-300 mb-4 uppercase">Signature vs. ML Detection</h4>
+                        <div class="relative flex-1 min-h-[220px] flex items-center justify-center">
+                            <canvas id="chart-pie-method"></canvas>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Incidents Aggregated Feeds -->
+                <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                    <!-- Active Incidents Feed -->
+                    <div class="glass-panel p-5 rounded-lg flex flex-col">
+                        <h4 class="text-sm font-semibold tracking-wider text-red-400 mb-4 uppercase border-b border-white/5 pb-2.5">
+                            🔥 Ongoing Active Incidents (In-Memory)
+                        </h4>
+                        <div id="incidents-feed-active" class="flex-1 max-h-[300px] overflow-y-auto flex flex-col gap-3">
+                            <div class="text-slate-400 text-sm italic p-4 bg-slate-900/20 border border-dashed border-white/5 rounded-lg text-center">
+                                No active security incidents detected. System healthy.
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Resolved Incidents Feed -->
+                    <div class="glass-panel p-5 rounded-lg flex flex-col">
+                        <h4 class="text-sm font-semibold tracking-wider text-emerald-400 mb-4 uppercase border-b border-white/5 pb-2.5">
+                            ✅ Recently Resolved Incidents (SQLite Dump)
+                        </h4>
+                        <div id="incidents-feed-resolved" class="flex-1 max-h-[300px] overflow-y-auto flex flex-col gap-3">
+                            <div class="text-slate-500 text-sm italic text-center p-4">
+                                No resolved incidents recorded yet.
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Traffic Log Table -->
+                <div class="glass-panel p-5 rounded-lg flex flex-col">
+                    <h4 class="text-sm font-semibold tracking-wider text-slate-300 mb-4 uppercase">Live Ingestion Feed (Last 50 Logs)</h4>
+                    <div class="overflow-x-auto max-h-[400px] border border-white/5 rounded-lg">
+                        <table class="w-full border-collapse text-left font-mono text-xs">
+                            <thead>
+                                <tr class="bg-slate-950/80 border-b border-white/5 text-slate-400">
+                                    <th class="p-3">ID</th>
+                                    <th class="p-3">Timestamp</th>
+                                    <th class="p-3">Source IP</th>
+                                    <th class="p-3">Dest IP</th>
+                                    <th class="p-3">Prediction</th>
+                                    <th class="p-3">Method</th>
+                                    <th class="p-3">Confidence</th>
+                                    <th class="p-3">Details</th>
+                                </tr>
+                            </thead>
+                            <tbody id="traffic-table-body" class="divide-y divide-white/5 bg-slate-900/10">
+                                <!-- Populated dynamically -->
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            <!-- TAB 2: Settings & User Management Content (Admin Only) -->
+            {% if is_admin %}
+            <div id="tab-content-settings" class="hidden flex flex-col gap-6">
+                <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                    <!-- Notification Settings Form -->
+                    <div class="glass-panel p-6 rounded-lg">
+                        <h3 class="text-md font-bold tracking-wider text-slate-200 mb-5 border-b border-white/5 pb-2.5">Alert & Dispatcher Configurations</h3>
+                        
+                        <form hx-post="/action/settings/save" hx-target="#settings-save-message" hx-swap="innerHTML" class="flex flex-col gap-5">
+                            <!-- SMTP Configuration -->
+                            <div>
+                                <h4 class="text-xs font-bold text-blue-400 uppercase tracking-widest mb-3">✉️ SMTP Email Dispatcher</h4>
+                                <div class="grid grid-cols-3 gap-3 mb-3">
+                                    <div class="col-span-2">
+                                        <label class="text-[10px] text-slate-400 uppercase font-semibold">SMTP Host</label>
+                                        <input type="text" name="smtp_host" id="settings-smtp-host" class="w-full bg-slate-950 border border-white/10 rounded px-3 py-1.5 text-sm focus:outline-none focus:border-blue-500" placeholder="smtp.gmail.com">
+                                    </div>
+                                    <div>
+                                        <label class="text-[10px] text-slate-400 uppercase font-semibold">Port</label>
+                                        <input type="number" name="smtp_port" id="settings-smtp-port" class="w-full bg-slate-950 border border-white/10 rounded px-3 py-1.5 text-sm focus:outline-none focus:border-blue-500" placeholder="587">
+                                    </div>
+                                </div>
+                                <div class="grid grid-cols-2 gap-3 mb-3">
+                                    <div>
+                                        <label class="text-[10px] text-slate-400 uppercase font-semibold">Sender Email</label>
+                                        <input type="email" name="sender_email" id="settings-sender-email" class="w-full bg-slate-950 border border-white/10 rounded px-3 py-1.5 text-sm focus:outline-none focus:border-blue-500" placeholder="sender@gmail.com">
+                                    </div>
+                                    <div>
+                                        <label class="text-[10px] text-slate-400 uppercase font-semibold">Sender Password</label>
+                                        <input type="password" name="sender_password" id="settings-sender-password" class="w-full bg-slate-950 border border-white/10 rounded px-3 py-1.5 text-sm focus:outline-none focus:border-blue-500" placeholder="App Password">
+                                    </div>
+                                </div>
+                                <div class="mb-3">
+                                    <label class="text-[10px] text-slate-400 uppercase font-semibold">Recipient Email</label>
+                                    <input type="email" name="recipient_email" id="settings-recipient-email" class="w-full bg-slate-950 border border-white/10 rounded px-3 py-1.5 text-sm focus:outline-none focus:border-blue-500" placeholder="recipient@security.local">
+                                </div>
+                                <div class="flex items-center gap-2 mt-2">
+                                    <input type="checkbox" name="email_enabled" id="settings-email-enabled" class="h-4 w-4 bg-slate-950 border border-white/10 rounded text-blue-500 focus:outline-none">
+                                    <label class="text-xs text-slate-300 select-none">Enable Email Notifications</label>
+                                </div>
+                            </div>
+                            
+                            <hr class="border-white/5">
+                            
+                            <!-- Telegram Configuration -->
+                            <div>
+                                <h4 class="text-xs font-bold text-blue-400 uppercase tracking-widest mb-3">💬 Telegram Bot Dispatcher</h4>
+                                <div class="mb-3">
+                                    <label class="text-[10px] text-slate-400 uppercase font-semibold">Bot Token ID</label>
+                                    <input type="password" name="tg_token" id="settings-tg-token" class="w-full bg-slate-950 border border-white/10 rounded px-3 py-1.5 text-sm focus:outline-none focus:border-blue-500" placeholder="123456:ABC-def...">
+                                </div>
+                                <div class="mb-3">
+                                    <label class="text-[10px] text-slate-400 uppercase font-semibold">Channel/Chat Target ID</label>
+                                    <input type="text" name="tg_chat_id" id="settings-tg-chat-id" class="w-full bg-slate-950 border border-white/10 rounded px-3 py-1.5 text-sm focus:outline-none focus:border-blue-500" placeholder="-10012345678">
+                                </div>
+                                <div class="flex items-center gap-2 mt-2">
+                                    <input type="checkbox" name="tg_enabled" id="settings-tg-enabled" class="h-4 w-4 bg-slate-950 border border-white/10 rounded text-blue-500 focus:outline-none">
+                                    <label class="text-xs text-slate-300 select-none">Enable Telegram Notifications</label>
+                                </div>
+                            </div>
+                            
+                            <!-- Actions Row -->
+                            <div class="flex items-center justify-between border-t border-white/5 pt-4">
+                                <div id="settings-save-message"></div>
+                                <button type="submit" class="bg-blue-500 hover:bg-blue-600 text-white px-5 py-1.5 rounded transition text-sm font-semibold">
+                                    Commit Configurations
+                                </button>
+                            </div>
+                        </form>
+                        
+                        <!-- Dispatch Testing Buttons -->
+                        <div class="flex gap-3 border-t border-white/5 pt-4 mt-4">
+                            <button hx-post="/action/settings/test/email" hx-target="#test-result-msg" class="flex-1 bg-slate-800 hover:bg-slate-750 text-slate-300 text-xs font-semibold px-3 py-2 rounded transition border border-white/5">
+                                Send Test Email Alert
+                            </button>
+                            <button hx-post="/action/settings/test/telegram" hx-target="#test-result-msg" class="flex-1 bg-slate-800 hover:bg-slate-750 text-slate-300 text-xs font-semibold px-3 py-2 rounded transition border border-white/5">
+                                Send Test Telegram Msg
+                            </button>
+                        </div>
+                        <div id="test-result-msg" class="mt-2 text-center text-xs"></div>
+                    </div>
+
+                    <!-- User Operators management -->
+                    <div class="glass-panel p-6 rounded-lg flex flex-col">
+                        <h3 class="text-md font-bold tracking-wider text-slate-200 mb-5 border-b border-white/5 pb-2.5">👤 Registered Operators Management</h3>
+                        
+                        <div class="overflow-x-auto border border-white/5 rounded-lg flex-1">
+                            <table class="w-full text-left font-mono text-xs">
+                                <thead>
+                                    <tr class="bg-slate-950/80 border-b border-white/5 text-slate-400">
+                                        <th class="p-3">ID</th>
+                                        <th class="p-3">Username</th>
+                                        <th class="p-3">Email Address</th>
+                                        <th class="p-3 text-right">Action</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="operators-table-body" class="divide-y divide-white/5 bg-slate-900/10">
+                                    <!-- Populated dynamically via loadOperators() -->
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            {% endif %}
+        </main>
+    </div>
+
+    <!-- Footer -->
+    <footer class="glass-panel border-t border-white/5 py-3.5 px-6 flex justify-between items-center text-xs text-slate-400 font-mono">
+        <span>KryptaFlow NIDS SOCConsole</span>
+        <span class="text-slate-500">Database Engine: SQLite (WAL)</span>
+    </footer>
+
+    <!-- Web Console JS Scripts -->
+    <script>
+        let socket;
+        let timelineChart, pieChart, severityChart, methodChart;
+        let timeBuckets = {};
+        let countsByTime = [];
+        let classesCount = {};
+        
+        // -------------------------------------------------------------
+        // WebSocket Event Handler & UI binding
+        // -------------------------------------------------------------
+        function initWebsockets() {
+            const connBadge = document.getElementById("socket-connection-badge");
+            
+            socket = io();
+            
+            socket.on("connect", () => {
+                connBadge.innerText = "Connected";
+                connBadge.classList.replace("text-red-400", "text-emerald-400");
+                connBadge.classList.replace("bg-red-400/10", "bg-emerald-400/10");
+                connBadge.classList.replace("border-red-400/20", "border-emerald-400/20");
+                logConsole("[*] Connected to web sockets. Real-time feeds online.");
+            });
+            
+            socket.on("disconnect", () => {
+                connBadge.innerText = "Disconnected";
+                connBadge.classList.replace("text-emerald-400", "text-red-400");
+                connBadge.classList.replace("bg-emerald-400/10", "bg-red-400/10");
+                connBadge.classList.replace("border-emerald-400/20", "border-red-400/20");
+                logConsole("[WARNING] WebSocket connection lost. Reconnect pending...");
+            });
+            
+            // New Network Flow received
+            socket.on("new_flow", (data) => {
+                logConsole(`[Flow Log] #${data.id} ${data.src_ip} -> ${data.prediction} (${data.confidence * 100}%)`);
+                appendTrafficRow(data);
+                updateChartsWithNewFlow(data);
+                fetchStats();  // Reload statistics metrics
+            });
+            
+            // New active incident captured
+            socket.on("new_incident", (data) => {
+                logConsole(`[ALERT] ACTIVE INCIDENT: Potential ${data.attack_type} attack ongoing from ${data.src_ip}!`);
+                updateActiveIncidentUI(data);
+                fetchStats();
+            });
+            
+            // Incident resolved/cooled down
+            socket.on("incident_resolved", (data) => {
+                logConsole(`[INFO] Incident resolved: ${data.attack_type} attack from ${data.src_ip} finished.`);
+                removeActiveIncidentUI(data.src_ip, data.attack_type);
+                fetchIncidents();  // Refresh recently resolved feeds
+                fetchStats();
+            });
+        }
+        
+        function logConsole(message) {
+            const consoleDiv = document.getElementById("console-logs");
+            const entry = document.createElement("div");
+            entry.innerText = `[${new Date().toLocaleTimeString()}] ${message}`;
+            consoleDiv.appendChild(entry);
+            consoleDiv.scrollTop = consoleDiv.scrollHeight;
+        }
+
+        // -------------------------------------------------------------
+        // UI Navigation & State
+        // -------------------------------------------------------------
+        function switchTab(tabId) {
+            const monContent = document.getElementById("tab-content-monitoring");
+            const setContent = document.getElementById("tab-content-settings");
+            const monBtn = document.getElementById("tab-btn-monitoring");
+            const setBtn = document.getElementById("tab-btn-settings");
+            
+            if (tabId === "monitoring") {
+                monContent.classList.remove("hidden");
+                if (setContent) setContent.classList.add("hidden");
+                
+                monBtn.classList.replace("border-transparent", "border-blue-500");
+                monBtn.classList.replace("text-slate-400", "text-blue-400");
+                
+                if (setBtn) {
+                    setBtn.classList.replace("border-blue-500", "border-transparent");
+                    setBtn.classList.replace("text-blue-400", "text-slate-400");
+                }
+            } else {
+                if (setContent) setContent.classList.remove("hidden");
+                monContent.classList.add("hidden");
+                
+                if (setBtn) {
+                    setBtn.classList.replace("border-transparent", "border-blue-500");
+                    setBtn.classList.replace("text-slate-400", "text-blue-400");
+                }
+                
+                monBtn.classList.replace("border-blue-500", "border-transparent");
+                monBtn.classList.replace("text-blue-400", "text-slate-400");
+                
+                loadOperators();
+                loadConfigData();
+            }
+        }
+
+        function toggleSniffer() {
+            fetch("/action/sniffer/toggle", { method: "POST" })
+                .then(res => res.json())
+                .then(data => {
+                    updateSnifferUI(data.active);
+                });
+        }
+
+        function updateSnifferUI(active) {
+            const text = document.getElementById("sniffer-status-text");
+            const indicator = document.getElementById("sniffer-status-indicator");
+            const btn = document.getElementById("sniffer-toggle-btn");
+            
+            if (active) {
+                text.innerText = "ONLINE";
+                text.className = "font-semibold text-sm font-mono tracking-wider text-emerald-400";
+                indicator.children[0].className = "animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 bg-emerald-400";
+                indicator.children[1].className = "relative inline-flex rounded-full h-3 w-3 bg-emerald-500";
+                if (btn) {
+                    btn.innerText = "STOP";
+                    btn.className = "px-3 py-1 rounded text-xs font-semibold tracking-wider transition border bg-red-500/10 hover:bg-red-500/20 text-red-400 border-red-500/20";
+                }
+                logConsole("[*] Background sniffer thread started.");
+            } else {
+                text.innerText = "OFFLINE";
+                text.className = "font-semibold text-sm font-mono tracking-wider text-red-400";
+                indicator.children[0].className = "animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 bg-red-400";
+                indicator.children[1].className = "relative inline-flex rounded-full h-3 w-3 bg-red-500";
+                if (btn) {
+                    btn.innerText = "START";
+                    btn.className = "px-3 py-1 rounded text-xs font-semibold tracking-wider transition border bg-blue-500/10 hover:bg-blue-500/20 text-blue-400 border-blue-500/20";
+                }
+                logConsole("[*] Background sniffer thread stopped.");
+            }
+        }
+
+        // -------------------------------------------------------------
+        // API Data Fetching & Dynamic Rendering
+        // -------------------------------------------------------------
+        function fetchStats() {
+            fetch("/api/stats")
+                .then(res => res.json())
+                .then(data => {
+                    const stats = data.stats;
+                    const threat = data.threat_level;
+                    
+                    document.getElementById("metric-total-flows").innerText = stats.total_records.toLocaleString();
+                    document.getElementById("metric-active-incidents").innerText = data.active_incidents_count.toLocaleString();
+                    document.getElementById("metric-attacks-hour").innerText = stats.attacks_last_hour.toLocaleString();
+                    document.getElementById("metric-avg-latency").innerText = `${stats.average_latency_ms.toFixed(2)} ms`;
+                    document.getElementById("metric-imputed-features").innerText = stats.total_imputed_features.toLocaleString();
+                    
+                    // Update Threat Banner
+                    const banner = document.getElementById("threat-banner");
+                    const label = document.getElementById("threat-banner-label");
+                    const pill = document.getElementById("threat-banner-pill");
+                    
+                    label.innerText = `SYSTEM THREAT LEVEL: ${threat}`;
+                    
+                    banner.className = "glass-panel border px-5 py-3.5 rounded-lg font-bold text-sm tracking-wider flex justify-between items-center transition-all duration-500";
+                    if (threat === "LOW") {
+                        banner.classList.add("glow-low", "text-emerald-400");
+                        pill.className = "text-xs font-semibold px-2.5 py-1 rounded bg-emerald-500/10 border border-emerald-500/20 uppercase tracking-widest";
+                        pill.innerText = "🛡️ Healthy Status";
+                    } else if (threat === "MEDIUM") {
+                        banner.classList.add("glow-medium", "text-amber-400");
+                        pill.className = "text-xs font-semibold px-2.5 py-1 rounded bg-amber-500/10 border border-amber-500/20 uppercase tracking-widest";
+                        pill.innerText = "⚠️ Warning State";
+                    } else if (threat === "HIGH") {
+                        banner.classList.add("glow-high", "text-red-400");
+                        pill.className = "text-xs font-semibold px-2.5 py-1 rounded bg-red-500/10 border border-red-500/20 uppercase tracking-widest";
+                        pill.innerText = "🚨 Threat Detected";
+                    } else {
+                        banner.classList.add("glow-critical", "text-red-600");
+                        pill.className = "text-xs font-semibold px-2.5 py-1 rounded bg-red-600/20 border border-red-600/30 uppercase tracking-widest";
+                        pill.innerText = "🔥 CRITICAL BREACH";
+                    }
+                    
+                    // Update static charts with values
+                    updateStaticCharts(stats);
+                });
+        }
+        
+        function fetchHistory() {
+            fetch("/api/history")
+                .then(res => res.json())
+                .then(data => {
+                    const tbody = document.getElementById("traffic-table-body");
+                    tbody.innerHTML = "";
+                    
+                    data.forEach(flow => {
+                        appendTrafficRow(flow, false);
+                    });
+                });
+        }
+        
+        function fetchIncidents() {
+            fetch("/api/incidents")
+                .then(res => res.json())
+                .then(data => {
+                    // Update resolved incidents feed
+                    const resolvedDiv = document.getElementById("incidents-feed-resolved");
+                    resolvedDiv.innerHTML = "";
+                    if (data.resolved.length === 0) {
+                        resolvedDiv.innerHTML = `<div class="text-slate-500 text-sm italic text-center p-4">No resolved incidents recorded yet.</div>`;
+                    } else {
+                        data.resolved.forEach(inc => {
+                            const entry = document.createElement("div");
+                            entry.className = "p-3.5 bg-slate-950/40 border border-white/5 rounded-lg flex flex-col gap-1.5 text-xs text-slate-300 leading-relaxed font-mono";
+                            
+                            const start = new Date(inc.start_time).toLocaleTimeString();
+                            const end = new Date(inc.last_update).toLocaleTimeString();
+                            
+                            entry.innerHTML = `
+                                <div><span class="text-emerald-400 font-semibold">✔ ${inc.attack_type} Resolved</span> from <span class="text-slate-200">${inc.src_ip}</span></div>
+                                <div class="text-[11px] text-slate-400">Total Count: <span class="text-slate-200">${inc.event_count}</span> anomalous flows</div>
+                                <div class="text-[11px] text-slate-500">Duration: ${start} to ${end}</div>
+                            `;
+                            resolvedDiv.appendChild(entry);
+                        });
+                    }
+                    
+                    // Update active incidents feed
+                    const activeDiv = document.getElementById("incidents-feed-active");
+                    activeDiv.innerHTML = "";
+                    if (data.active.length === 0) {
+                        activeDiv.innerHTML = `
+                            <div class="text-slate-400 text-sm italic p-4 bg-slate-900/20 border border-dashed border-white/5 rounded-lg text-center">
+                                No active security incidents detected. System healthy.
+                            </div>
+                        `;
+                    } else {
+                        data.active.forEach(inc => {
+                            updateActiveIncidentUI(inc);
+                        });
+                    }
+                });
+        }
+
+        function appendTrafficRow(flow, appendToTop = true) {
+            const tbody = document.getElementById("traffic-table-body");
+            const tr = document.createElement("tr");
+            tr.className = "border-b border-white/5 text-slate-300 hover:bg-white/5 transition-colors";
+            
+            // Format time
+            const time = new Date(flow.timestamp).toLocaleTimeString();
+            
+            // Severity color pill
+            let badgeClass = "bg-slate-800 text-slate-400 border-white/10";
+            if (flow.severity === "LOW") badgeClass = "bg-emerald-500/10 text-emerald-400 border-emerald-500/20";
+            else if (flow.severity === "MEDIUM") badgeClass = "bg-amber-500/10 text-amber-400 border-amber-500/20";
+            else if (flow.severity === "HIGH") badgeClass = "bg-red-500/10 text-red-400 border-red-500/20";
+            else if (flow.severity === "CRITICAL") badgeClass = "bg-red-600/20 text-red-500 border-red-600/30";
+            
+            // Method color pill
+            const methodClass = flow.detection_method === "BEHAVIOR" 
+                ? "bg-blue-500/10 text-blue-400 border-blue-500/20" 
+                : "bg-purple-500/10 text-purple-400 border-purple-500/20";
+                
+            tr.innerHTML = `
+                <td class="p-3 text-slate-500 font-mono">#${flow.id}</td>
+                <td class="p-3 text-slate-400 font-mono">${time}</td>
+                <td class="p-3 font-semibold">${flow.src_ip}</td>
+                <td class="p-3 text-slate-400">${flow.dst_ip}:${flow.dst_port}</td>
+                <td class="p-3">
+                    <span class="px-2 py-0.5 rounded border text-[10px] font-bold uppercase tracking-wider ${badgeClass}">
+                        ${flow.prediction}
+                    </span>
+                </td>
+                <td class="p-3">
+                    <span class="px-2 py-0.5 rounded border text-[10px] font-semibold ${methodClass}">
+                        ${flow.detection_method}
+                    </span>
+                </td>
+                <td class="p-3 font-semibold">${(flow.confidence * 100).toFixed(1)}%</td>
+                <td class="p-3 text-slate-400 font-mono text-[11px]">${flow.details}</td>
+            `;
+            
+            if (appendToTop) {
+                tbody.insertBefore(tr, tbody.firstChild);
+                // Maintain maximum 50 rows
+                if (tbody.children.length > 50) {
+                    tbody.removeChild(tbody.lastChild);
+                }
+            } else {
+                tbody.appendChild(tr);
+            }
+        }
+        
+        function updateActiveIncidentUI(inc) {
+            const activeDiv = document.getElementById("incidents-feed-active");
+            
+            // Find existing incident UI card
+            const cardId = `active-inc-${inc.src_ip.replace(/\./g, '-')}-${inc.attack_type}`;
+            let card = document.getElementById(cardId);
+            
+            const start = new Date(inc.start_time).toLocaleTimeString();
+            const last = new Date(inc.last_update).toLocaleTimeString();
+            
+            if (!card) {
+                // If it is the initial card and the placeholder text exists, remove it
+                if (activeDiv.innerHTML.includes("System healthy")) {
+                    activeDiv.innerHTML = "";
+                }
+                
+                card = document.createElement("div");
+                card.id = cardId;
+                card.className = "p-3.5 bg-red-950/20 border border-red-500/20 rounded-lg flex flex-col gap-1.5 text-xs text-slate-300 leading-relaxed font-mono relative overflow-hidden";
+                activeDiv.appendChild(card);
+            }
+            
+            card.innerHTML = `
+                <div class="absolute top-0 left-0 w-1.5 h-full bg-red-500"></div>
+                <div class="pl-2">
+                    <div class="flex justify-between items-center">
+                        <span class="text-red-400 font-bold">🔥 Potential ${inc.attack_type}</span>
+                        <span class="bg-red-500/10 text-red-400 text-[10px] font-semibold px-2 py-0.5 rounded border border-red-500/20 uppercase tracking-widest font-sans animate-pulse">Ongoing</span>
+                    </div>
+                    <div class="text-slate-300 mt-1">Source IP (Attacker): <span class="text-slate-100 font-semibold">${inc.src_ip}</span></div>
+                    <div class="text-[11px] text-slate-400 mt-0.5">Aggregated Anomalies: <span class="text-red-400 font-bold font-mono">${inc.event_count}</span> events</div>
+                    <div class="text-[11px] text-slate-500 mt-1">First anomaly: ${start} | Last active: ${last}</div>
+                </div>
+            `;
+        }
+        
+        function removeActiveIncidentUI(srcIp, attackType) {
+            const cardId = `active-inc-${srcIp.replace(/\./g, '-')}-${attackType}`;
+            const card = document.getElementById(cardId);
+            if (card) {
+                card.remove();
+            }
+            
+            // If active incidents list is now empty, restore healthy placeholder
+            const activeDiv = document.getElementById("incidents-feed-active");
+            if (activeDiv.children.length === 0) {
+                activeDiv.innerHTML = `
+                    <div class="text-slate-400 text-sm italic p-4 bg-slate-900/20 border border-dashed border-white/5 rounded-lg text-center">
+                        No active security incidents detected. System healthy.
+                    </div>
+                `;
+            }
+        }
+
+        // -------------------------------------------------------------
+        // Administrator settings forms operations (HTMX / fetch API)
+        // -------------------------------------------------------------
+        function loadOperators() {
+            const tbody = document.getElementById("operators-table-body");
+            if (!tbody) return;
+            
+            fetch("/api/operators")
+                .then(res => res.json())
+                .then(data => {
+                    tbody.innerHTML = "";
+                    if (data.length === 0) {
+                        tbody.innerHTML = `<tr><td colspan="4" class="p-3 text-center text-slate-500">No operator accounts registered.</td></tr>`;
+                        return;
+                    }
+                    
+                    data.forEach(op => {
+                        const tr = document.createElement("tr");
+                        tr.className = "border-b border-white/5 text-slate-300 hover:bg-white/5 transition-colors";
+                        
+                        // Active user check
+                        let actionCell = "";
+                        if (op.id === {{ user.id }}) {
+                            actionCell = `<span class="text-emerald-400 font-semibold text-xs">Active Session</span>`;
+                        } else {
+                            actionCell = `
+                                <button hx-delete="/action/operators/delete/${op.id}" 
+                                        hx-target="closest tr" 
+                                        hx-swap="outerHTML" 
+                                        hx-confirm="Are you sure you want to permanently delete operator '${op.username}'?"
+                                        class="bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/25 px-2.5 py-1 rounded transition text-[11px] font-semibold font-sans">
+                                    Delete
+                                </button>
+                            `;
+                        }
+                        
+                        tr.innerHTML = `
+                            <td class="p-3 font-mono text-slate-500">#${op.id}</td>
+                            <td class="p-3 font-semibold">${op.username}</td>
+                            <td class="p-3 text-slate-400">${op.email}</td>
+                            <td class="p-3 text-right">${actionCell}</td>
+                        `;
+                        tbody.appendChild(tr);
+                    });
+                    
+                    // Let HTMX process the newly created elements (for hx-delete triggers)
+                    htmx.process(tbody);
+                });
+        }
+        
+        function loadConfigData() {
+            fetch("/api/stats") // We can also call configs, but for now we fetch it once or read from page load
+                .then(() => {
+                    // Let's load the inputs with configuration data
+                    fetch("/api/incidents") // Placeholder for general config fetch API
+                        // In dashboard.py we load alert_config.json via load_config(). Let's populate the inputs directly:
+                        .then(() => {
+                            // Fetch settings via standard AJAX to pre-populate form
+                            // We can fetch alert configurations from the backend. 
+                            // Since we have load_config in python, let's create a small config payload API or just set defaults.
+                            // Better: let's fetch configs from a settings config API
+                            fetchSettingsConfig();
+                        });
+                });
+        }
+        
+        function fetchSettingsConfig() {
+            // Fetch configuration directly from a config API
+            fetch("/api/settings/config")
+                .then(res => res.ok ? res.json() : null)
+                .then(cfg => {
+                    if (!cfg) return;
+                    document.getElementById("settings-smtp-host").value = cfg.email.smtp_server || "";
+                    document.getElementById("settings-smtp-port").value = cfg.email.smtp_port || 587;
+                    document.getElementById("settings-sender-email").value = cfg.email.sender_email || "";
+                    document.getElementById("settings-sender-password").value = cfg.email.sender_password ? "********" : "";
+                    document.getElementById("settings-recipient-email").value = cfg.email.recipient_email || "";
+                    document.getElementById("settings-email-enabled").checked = cfg.email.enabled || false;
+                    
+                    document.getElementById("settings-tg-token").value = cfg.telegram.bot_token ? "********" : "";
+                    document.getElementById("settings-tg-chat-id").value = cfg.telegram.chat_id || "";
+                    document.getElementById("settings-tg-enabled").checked = cfg.telegram.enabled || false;
+                });
+        }
+        
+        // Define settings config API route in dashboard.py (handled dynamically, returning it here)
+        
+        // -------------------------------------------------------------
+        // Charts.js Initialization and Live Data Updates
+        // -------------------------------------------------------------
+        function initCharts() {
+            Chart.defaults.color = 'rgba(255, 255, 255, 0.6)';
+            Chart.defaults.borderColor = 'rgba(255, 255, 255, 0.05)';
+            
+            // 1. Timeline Chart
+            const ctxTimeline = document.getElementById('chart-timeline').getContext('2d');
+            timelineChart = new Chart(ctxTimeline, {
+                type: 'line',
+                data: {
+                    labels: [],
+                    datasets: [{
+                        label: 'Captured Flows (10s intervals)',
+                        data: [],
+                        borderColor: '#0984e3',
+                        backgroundColor: 'rgba(9, 132, 227, 0.05)',
+                        borderWidth: 2,
+                        tension: 0.4,
+                        fill: true
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            grid: { color: 'rgba(255, 255, 255, 0.03)' }
+                        },
+                        x: {
+                            grid: { display: false }
+                        }
+                    }
+                }
+            });
+            
+            // 2. Intrusion Type Pie Chart
+            const ctxPie = document.getElementById('chart-pie').getContext('2d');
+            pieChart = new Chart(ctxPie, {
+                type: 'doughnut',
+                data: {
+                    labels: [],
+                    datasets: [{
+                        data: [],
+                        backgroundColor: ['#00b894', '#ff7675', '#fdcb6e', '#0984e3', '#6c5ce7', '#d63031', '#ffeaa7'],
+                        borderWidth: 1,
+                        borderColor: 'rgba(10, 12, 18, 0.8)'
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { position: 'right' }
+                    }
+                }
+            });
+            
+            // 3. Severity Level Bar Chart
+            const ctxBar = document.getElementById('chart-bar-severity').getContext('2d');
+            severityChart = new Chart(ctxBar, {
+                type: 'bar',
+                data: {
+                    labels: ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'],
+                    datasets: [{
+                        label: 'Threat Count',
+                        data: [0, 0, 0, 0],
+                        backgroundColor: ['#00b894', '#fdcb6e', '#ff7675', '#d63031'],
+                        borderWidth: 0,
+                        borderRadius: 4
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            grid: { color: 'rgba(255, 255, 255, 0.03)' }
+                        },
+                        x: {
+                            grid: { display: false }
+                        }
+                    }
+                }
+            });
+            
+            // 4. Signature vs ML Pie Chart
+            const ctxMethod = document.getElementById('chart-pie-method').getContext('2d');
+            methodChart = new Chart(ctxMethod, {
+                type: 'doughnut',
+                data: {
+                    labels: ['Behavioral (ML)', 'Signature-based'],
+                    datasets: [{
+                        data: [0, 0],
+                        backgroundColor: ['#0984e3', '#6c5ce7'],
+                        borderWidth: 1,
+                        borderColor: 'rgba(10, 12, 18, 0.8)'
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { position: 'bottom' }
+                    }
+                }
+            });
+        }
+        
+        function updateStaticCharts(stats) {
+            // Update class distribution pie chart
+            const classes = Object.keys(stats.class_distribution);
+            const classCounts = Object.values(stats.class_distribution);
+            pieChart.data.labels = classes;
+            pieChart.data.datasets[0].data = classCounts;
+            pieChart.update();
+            
+            // Update severity distribution chart
+            const severities = ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'];
+            const sevData = severities.map(sev => stats.severity_distribution[sev] || 0);
+            severityChart.data.datasets[0].data = sevData;
+            severityChart.update();
+            
+            // Update signature vs behavioral method chart
+            const behavioral = stats.detection_method_breakdown.BEHAVIOR || 0;
+            const signature = stats.detection_method_breakdown.SIGNATURE || 0;
+            methodChart.data.datasets[0].data = [behavioral, signature];
+            methodChart.update();
+        }
+        
+        function updateChartsWithNewFlow(flow) {
+            // 1. Update timeline data points dynamically
+            const date = new Date(flow.timestamp);
+            // Group by 10 second buckets
+            const seconds = Math.floor(date.getSeconds() / 10) * 10;
+            date.setSeconds(seconds);
+            date.setMilliseconds(0);
+            const bucketStr = date.toLocaleTimeString();
+            
+            if (timeBuckets[bucketStr]) {
+                timeBuckets[bucketStr] += 1;
+            } else {
+                timeBuckets[bucketStr] = 1;
+                timelineChart.data.labels.push(bucketStr);
+                // Keep only last 15 points on the timeline
+                if (timelineChart.data.labels.length > 15) {
+                    const oldLabel = timelineChart.data.labels.shift();
+                    delete timeBuckets[oldLabel];
+                    timelineChart.data.datasets[0].data.shift();
+                }
+            }
+            
+            // Sync counts array
+            const dataIndex = timelineChart.data.labels.indexOf(bucketStr);
+            timelineChart.data.datasets[0].data[dataIndex] = timeBuckets[bucketStr];
+            timelineChart.update();
+        }
+
+        // Add additional API endpoints in dashboard.py for retrieving settings configs:
+        // In the background loop or startup logic, we fetch this endpoint:
+        // We will add the /api/settings/config route in dashboard.py next.
+        
+        // -------------------------------------------------------------
+        // Console Initializations
+        // -------------------------------------------------------------
+        window.addEventListener('DOMContentLoaded', () => {
+            initCharts();
+            fetchStats();
+            fetchHistory();
+            fetchIncidents();
+            initWebsockets();
+            
+            // Auto refresh metrics every 6 seconds as a backup sync
+            setInterval(() => {
+                fetchStats();
+            }, 6000);
+        });
+    </script>
+</body>
+</html>
