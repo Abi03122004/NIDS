@@ -23,7 +23,7 @@
     <!-- HTMX CDN -->
     <script src="https://unpkg.com/htmx.org@1.9.10"></script>
     <!-- Socket.IO Client -->
-    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+    <script src="/socket.io/socket.io.js"></script>
     <!-- Chart.js CDN -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     
@@ -407,7 +407,12 @@
     <!-- Web Console JS Scripts -->
     <script>
         const sessionLoginTime = "{{ login_time }}";
+        const loginTimeMs = (sessionLoginTime && sessionLoginTime !== "None" && sessionLoginTime !== "null") 
+            ? Date.parse(sessionLoginTime) 
+            : 0;
+            
         let socket;
+        let latestFlowId = 0;
         let timelineChart, pieChart, severityChart, methodChart;
         let timeBuckets = {};
         let countsByTime = [];
@@ -419,7 +424,10 @@
         function initWebsockets() {
             const connBadge = document.getElementById("socket-connection-badge");
             
-            socket = io();
+            socket = io({
+                transports: ['polling', 'websocket'],
+                upgrade: true
+            });
             
             socket.on("connect", () => {
                 connBadge.innerText = "Connected";
@@ -439,7 +447,8 @@
             
             // New Network Flow received
             socket.on("new_flow", (data) => {
-                if (sessionLoginTime && data.timestamp < sessionLoginTime) return;
+                const flowTimeMs = Date.parse(data.timestamp);
+                if (loginTimeMs && flowTimeMs < loginTimeMs) return;
                 logConsole(`[Flow Log] #${data.id} ${data.src_ip} -> ${data.prediction} (${data.confidence * 100}%)`);
                 appendTrafficRow(data);
                 updateChartsWithNewFlow(data);
@@ -448,7 +457,8 @@
             
             // New active incident captured
             socket.on("new_incident", (data) => {
-                if (sessionLoginTime && data.last_update < sessionLoginTime) return;
+                const lastUpdateMs = Date.parse(data.last_update);
+                if (loginTimeMs && lastUpdateMs < loginTimeMs) return;
                 logConsole(`[ALERT] ACTIVE INCIDENT: Potential ${data.attack_type} attack ongoing from ${data.src_ip}!`);
                 updateActiveIncidentUI(data);
                 fetchStats();
@@ -596,11 +606,23 @@
                 .then(res => res.json())
                 .then(data => {
                     const tbody = document.getElementById("traffic-table-body");
-                    tbody.innerHTML = "";
                     
-                    data.forEach(flow => {
-                        appendTrafficRow(flow, false);
-                    });
+                    // Initial draw: if table is empty
+                    if (tbody.children.length === 0) {
+                        data.forEach(flow => {
+                            appendTrafficRow(flow, false);
+                        });
+                        return;
+                    }
+                    
+                    // Prepend new flows in chronological order
+                    for (let i = data.length - 1; i >= 0; i--) {
+                        const flow = data[i];
+                        if (flow.id > latestFlowId) {
+                            appendTrafficRow(flow, true);
+                            updateChartsWithNewFlow(flow);
+                        }
+                    }
                 });
         }
         
@@ -648,8 +670,18 @@
         }
 
         function appendTrafficRow(flow, appendToTop = true) {
+            if (flow.id > latestFlowId) {
+                latestFlowId = flow.id;
+            }
+            
+            // Avoid duplicate rows
+            if (document.getElementById(`flow-row-${flow.id}`)) {
+                return;
+            }
+            
             const tbody = document.getElementById("traffic-table-body");
             const tr = document.createElement("tr");
+            tr.id = `flow-row-${flow.id}`;
             tr.className = "border-b border-white/5 text-slate-300 hover:bg-white/5 transition-colors";
             
             // Format time
@@ -1013,10 +1045,15 @@
             fetchIncidents();
             initWebsockets();
             
-            // Auto refresh metrics every 6 seconds as a backup sync
+            // Auto refresh metrics and data every 5 seconds as a backup sync
             setInterval(() => {
                 fetchStats();
-            }, 6000);
+                // Hybrid Polling: if WebSocket is not connected/failed, poll history and incidents
+                if (!socket || !socket.connected) {
+                    fetchHistory();
+                    fetchIncidents();
+                }
+            }, 5000);
         });
     </script>
 </body>
