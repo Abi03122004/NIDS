@@ -3,7 +3,7 @@ import sys
 import time
 import secrets
 from datetime import datetime, timezone
-from flask import Flask, render_template, request, jsonify, session, redirect, url_for
+from flask import Flask, render_template, request, jsonify, session, redirect, url_for, make_response
 from flask_socketio import SocketIO, emit
 
 # Ensure local directories are in path
@@ -70,7 +70,19 @@ def index():
     is_render = "RENDER" in os.environ
     login_time = session.get("login_time")
     
-    return render_template("index.html", user=user, is_admin=is_admin, sniffer_active=sniffer_active, is_render=is_render, login_time=login_time)
+    resp = make_response(render_template(
+        "index.html",
+        user=user,
+        is_admin=is_admin,
+        sniffer_active=sniffer_active,
+        is_render=is_render,
+        login_time=login_time
+    ))
+    # Never cache the dashboard page — always serve fresh HTML with latest JS
+    resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    resp.headers["Pragma"] = "no-cache"
+    resp.headers["Expires"] = "0"
+    return resp
 
 @app.route("/login", methods=["GET", "POST"])
 def login():

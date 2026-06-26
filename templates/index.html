@@ -3,6 +3,10 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <!-- Force browsers to never cache this page -->
+    <meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
     <title>KryptaFlow NIDS SOC Console</title>
     <!-- Google Fonts -->
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -20,10 +24,8 @@
             }
         }
     </script>
-    <!-- HTMX CDN -->
-    <script src="https://unpkg.com/htmx.org@1.9.10"></script>
-    <!-- Socket.IO Client -->
-    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+    <!-- Socket.IO Client - served locally to avoid CDN timeout issues -->
+    <script src="/static/socket.io.min.js" onerror="console.warn('Local socket.io failed, trying CDN...'); var s=document.createElement('script'); s.src='https://cdn.socket.io/4.7.5/socket.io.min.js'; document.head.appendChild(s);"></script>
     <!-- Chart.js CDN -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     
@@ -144,7 +146,10 @@
             <div class="flex-1 flex flex-col">
                 <h3 class="text-xs font-bold tracking-widest text-slate-400 uppercase mb-3 flex items-center justify-between">
                     <span>Console Notifications</span>
-                    <span id="socket-connection-badge" class="text-[10px] font-mono font-normal tracking-normal text-red-400 bg-red-400/10 border border-red-400/20 px-1.5 py-0.5 rounded">Disconnected</span>
+                    <div class="flex flex-col items-end gap-1">
+                        <span id="socket-connection-badge" class="text-[10px] font-mono font-normal tracking-normal text-red-400 bg-red-400/10 border border-red-400/20 px-1.5 py-0.5 rounded">Disconnected</span>
+                        <span id="poll-ticker" class="text-[10px] font-mono font-normal text-slate-600">sync: --</span>
+                    </div>
                 </h3>
                 
                 <div id="console-logs" class="flex-1 min-h-[160px] max-h-[300px] md:max-h-none overflow-y-auto bg-slate-950/80 border border-white/5 rounded-lg p-3 font-mono text-[11px] text-slate-300 leading-relaxed flex flex-col gap-1.5">
@@ -558,7 +563,7 @@
         // API Data Fetching & Dynamic Rendering
         // -------------------------------------------------------------
         function fetchStats() {
-            fetch("/api/stats")
+            fetch("/api/stats?_t=" + Date.now())
                 .then(res => res.json())
                 .then(data => {
                     const stats = data.stats;
@@ -602,28 +607,35 @@
         }
         
         function fetchHistory() {
-            fetch("/api/history")
+            const ts = Date.now();
+            fetch("/api/history?limit=50&_t=" + ts)
                 .then(res => res.json())
                 .then(data => {
+                    if (!data || data.length === 0) return;
                     const tbody = document.getElementById("traffic-table-body");
-                    
-                    // Initial draw: if table is empty
+
+                    // Initial draw: table is empty, populate all rows
                     if (tbody.children.length === 0) {
-                        data.forEach(flow => {
-                            appendTrafficRow(flow, false);
-                        });
+                        data.forEach(flow => appendTrafficRow(flow, false));
+                        // latestFlowId is already updated inside appendTrafficRow
                         return;
                     }
-                    
-                    // Prepend new flows in chronological order
+
+                    // Always check for new rows on every poll — do NOT gate on socket status
+                    let newRowCount = 0;
                     for (let i = data.length - 1; i >= 0; i--) {
                         const flow = data[i];
                         if (flow.id > latestFlowId) {
                             appendTrafficRow(flow, true);
                             updateChartsWithNewFlow(flow);
+                            newRowCount++;
                         }
                     }
-                });
+                    if (newRowCount > 0) {
+                        logConsole(`[Sync] Polled ${newRowCount} new flow(s) from REST API.`);
+                    }
+                })
+                .catch(err => console.warn('[fetchHistory error]', err));
         }
         
         function fetchIncidents() {
@@ -1043,17 +1055,28 @@
             fetchStats();
             fetchHistory();
             fetchIncidents();
-            initWebsockets();
-            
-            // Auto refresh metrics and data every 5 seconds as a backup sync
+
+            // START POLLING FIRST — unconditional, survives any WebSocket failure
+            // This is the primary live-update mechanism. WebSocket is bonus.
             setInterval(() => {
+                const ticker = document.getElementById('poll-ticker');
+                if (ticker) ticker.textContent = 'sync: ' + new Date().toLocaleTimeString();
                 fetchStats();
-                // Hybrid Polling: if WebSocket is not connected/failed, poll history and incidents
-                if (!socket || !socket.connected) {
-                    fetchHistory();
-                    fetchIncidents();
-                }
+                fetchHistory();
+                fetchIncidents();
             }, 5000);
+
+            // WebSocket init is optional — if socket.io fails to load, polling above still works
+            try {
+                if (typeof io !== 'undefined') {
+                    initWebsockets();
+                } else {
+                    logConsole('[INFO] WebSocket unavailable (socket.io not loaded). REST polling active.');
+                }
+            } catch (e) {
+                console.warn('[WebSocket init failed]', e);
+                logConsole('[WARN] WebSocket init failed. Falling back to REST polling only.');
+            }
         });
     </script>
 </body>
