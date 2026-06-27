@@ -9,3 +9,5 @@ plotly
 Werkzeug
 Flask-SocketIO
 eventlet
+gunicorn
+

@@ -29,34 +29,100 @@
     <!-- Chart.js CDN -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     
+    <script>
+        // Check and apply theme as early as possible
+        (function() {
+            const savedTheme = localStorage.getItem('theme');
+            const systemPrefersLight = window.matchMedia('(prefers-color-scheme: light)').matches;
+            if (savedTheme === 'light' || (!savedTheme && systemPrefersLight)) {
+                document.documentElement.classList.add('light');
+            } else {
+                document.documentElement.classList.remove('light');
+            }
+        })();
+    </script>
+    
     <style>
+        :root {
+            /* Dark Mode colors matching the uploaded image */
+            --bg-primary: #0c0e15;
+            --bg-secondary: #141522;
+            --bg-tertiary: #1c1d2e;
+            --bg-glass: rgba(20, 21, 34, 0.85);
+            --border-color: rgba(255, 255, 255, 0.06);
+            --border-color-strong: rgba(255, 255, 255, 0.12);
+            --text-primary: #f8fafc;
+            --text-secondary: #94a3b8;
+            --accent-purple: #8b5cf6;
+            --accent-cyan: #06b6d4;
+            --card-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.4);
+            --bg-console: #06070a;
+            --text-console: #cbd5e1;
+            
+            /* Alerts/glows */
+            --glow-low: rgba(0, 184, 148, 0.15);
+            --glow-medium: rgba(253, 203, 110, 0.15);
+            --glow-high: rgba(255, 118, 117, 0.15);
+            --glow-critical: rgba(214, 48, 49, 0.25);
+            
+            --scrollbar-thumb: rgba(255, 255, 255, 0.1);
+            --scrollbar-thumb-hover: rgba(255, 255, 255, 0.2);
+            --scrollbar-track: rgba(255, 255, 255, 0.01);
+        }
+
+        :root.light {
+            /* Light Mode colors */
+            --bg-primary: #f1f5f9;
+            --bg-secondary: #ffffff;
+            --bg-tertiary: #e2e8f0;
+            --bg-glass: rgba(255, 255, 255, 0.85);
+            --border-color: rgba(0, 0, 0, 0.08);
+            --border-color-strong: rgba(0, 0, 0, 0.15);
+            --text-primary: #1e293b;
+            --text-secondary: #64748b;
+            --accent-purple: #6d28d9;
+            --accent-cyan: #0891b2;
+            --card-shadow: 0 8px 30px rgba(0, 0, 0, 0.05);
+            --bg-console: #f8fafc;
+            --text-console: #1e293b;
+            
+            /* Alerts/glows (softer borders in light mode) */
+            --glow-low: rgba(16, 185, 129, 0.1);
+            --glow-medium: rgba(245, 158, 11, 0.15);
+            --glow-high: rgba(239, 68, 68, 0.1);
+            --glow-critical: rgba(220, 38, 38, 0.15);
+            
+            --scrollbar-thumb: rgba(0, 0, 0, 0.15);
+            --scrollbar-thumb-hover: rgba(0, 0, 0, 0.3);
+            --scrollbar-track: rgba(0, 0, 0, 0.02);
+        }
+
         body {
-            background-color: #05070a;
-            background-image: 
-                radial-gradient(circle at 10% 20%, rgba(9, 132, 227, 0.03) 0%, transparent 40%),
-                radial-gradient(circle at 90% 80%, rgba(214, 48, 49, 0.02) 0%, transparent 45%);
+            background-color: var(--bg-primary) !important;
+            color: var(--text-primary) !important;
+            background-image: none !important;
         }
         .glass-panel {
-            background: rgba(10, 12, 18, 0.8);
+            background: var(--bg-glass) !important;
             backdrop-filter: blur(12px);
-            border: 1px solid rgba(255, 255, 255, 0.05);
-            box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+            border: 1px solid var(--border-color) !important;
+            box-shadow: var(--card-shadow) !important;
         }
         .glow-low {
-            border-color: #00b894;
-            box-shadow: 0 0 15px rgba(0, 184, 148, 0.15);
+            border-color: #00b894 !important;
+            box-shadow: 0 0 15px var(--glow-low) !important;
         }
         .glow-medium {
-            border-color: #fdcb6e;
-            box-shadow: 0 0 15px rgba(253, 203, 110, 0.15);
+            border-color: #fdcb6e !important;
+            box-shadow: 0 0 15px var(--glow-medium) !important;
         }
         .glow-high {
-            border-color: #ff7675;
-            box-shadow: 0 0 15px rgba(255, 118, 117, 0.15);
+            border-color: #ff7675 !important;
+            box-shadow: 0 0 15px var(--glow-high) !important;
         }
         .glow-critical {
-            border-color: #d63031;
-            box-shadow: 0 0 20px rgba(214, 48, 49, 0.25);
+            border-color: #d63031 !important;
+            box-shadow: 0 0 20px var(--glow-critical) !important;
         }
         /* Custom scrollbar */
         ::-webkit-scrollbar {
@@ -64,14 +130,113 @@
             height: 6px;
         }
         ::-webkit-scrollbar-track {
-            background: rgba(255, 255, 255, 0.01);
+            background: var(--scrollbar-track) !important;
         }
         ::-webkit-scrollbar-thumb {
-            background: rgba(255, 255, 255, 0.1);
+            background: var(--scrollbar-thumb) !important;
             border-radius: 4px;
         }
         ::-webkit-scrollbar-thumb:hover {
-            background: rgba(255, 255, 255, 0.2);
+            background: var(--scrollbar-thumb-hover) !important;
+        }
+
+        /* Generic Tailwind Overrides */
+        .text-slate-100, .text-slate-200, .text-slate-300, .text-slate-50 {
+            color: var(--text-primary) !important;
+        }
+        .text-slate-400, .text-slate-500 {
+            color: var(--text-secondary) !important;
+        }
+        .text-slate-600 {
+            color: var(--text-secondary) !important;
+            opacity: 0.6;
+        }
+        .bg-slate-900\/60, .bg-slate-900\/20, .bg-slate-900\/10, .bg-slate-900, .bg-slate-800 {
+            background-color: var(--bg-tertiary) !important;
+            color: var(--text-primary) !important;
+        }
+        .bg-slate-950\/60, .bg-slate-950\/80, .bg-slate-950, .bg-slate-950\/40 {
+            background-color: var(--bg-console) !important;
+            color: var(--text-console) !important;
+            border-color: var(--border-color) !important;
+        }
+        .border-white\/5 {
+            border-color: var(--border-color) !important;
+        }
+        .border-white\/10 {
+            border-color: var(--border-color-strong) !important;
+        }
+        .divide-white\/5 > * + * {
+            border-color: var(--border-color) !important;
+        }
+        hr.border-white\/5 {
+            border-color: var(--border-color) !important;
+        }
+        table thead tr.bg-slate-950\/80 {
+            background-color: var(--bg-tertiary) !important;
+            border-bottom: 1px solid var(--border-color) !important;
+        }
+        table tbody tr {
+            border-bottom: 1px solid var(--border-color) !important;
+        }
+        #console-logs {
+            background-color: var(--bg-console) !important;
+            color: var(--text-console) !important;
+            border-color: var(--border-color) !important;
+        }
+        
+        /* Inputs & Form styling */
+        input[type="text"], input[type="number"], input[type="email"], input[type="password"], select, textarea {
+            background-color: var(--bg-primary) !important;
+            border: 1px solid var(--border-color-strong) !important;
+            color: var(--text-primary) !important;
+        }
+        input[type="text"]:focus, input[type="number"]:focus, input[type="email"]:focus, input[type="password"]:focus, select:focus {
+            border-color: var(--accent-purple) !important;
+            outline: none;
+        }
+        
+        /* Interactive controls */
+        .theme-btn {
+            background-color: var(--bg-tertiary) !important;
+            border: 1px solid var(--border-color-strong) !important;
+            color: var(--text-primary) !important;
+        }
+        .theme-btn:hover {
+            background-color: var(--border-color-strong) !important;
+        }
+        
+        /* Active Tab indicator overrides */
+        .border-blue-500 {
+            border-color: var(--accent-purple) !important;
+        }
+        .text-blue-400 {
+            color: var(--accent-purple) !important;
+        }
+        
+        /* Header h1 brand gradient override */
+        header h1 {
+            background-image: linear-gradient(to right, var(--accent-purple), var(--accent-cyan)) !important;
+        }
+        
+        /* Specific status adjustments for light mode contrast */
+        :root.light .text-red-400 {
+            color: #dc2626 !important;
+        }
+        :root.light .text-amber-500 {
+            color: #d97706 !important;
+        }
+        :root.light .text-indigo-400 {
+            color: #4f46e5 !important;
+        }
+        :root.light .text-emerald-400, :root.light .text-emerald-500 {
+            color: #059669 !important;
+        }
+        :root.light .text-blue-400 {
+            color: #2563eb !important;
+        }
+        :root.light .text-purple-400 {
+            color: #7c3aed !important;
         }
     </style>
 </head>
@@ -98,6 +263,11 @@
                 </span>
             </div>
             
+            <!-- Theme Toggle Button -->
+            <button id="theme-toggle-btn" onclick="toggleTheme()" class="theme-btn p-2 rounded transition flex items-center justify-center cursor-pointer" title="Toggle Light/Dark Theme">
+                <span id="theme-toggle-icon" class="text-base">🌙</span>
+            </button>
+
             <a href="/logout" class="bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/20 hover:border-red-500/30 px-4 py-1.5 rounded transition text-sm font-semibold">
                 Sign Out
             </a>
@@ -109,51 +279,61 @@
         <!-- Sidebar Controls -->
         <aside class="w-full md:w-80 glass-panel md:border-r border-b md:border-b-0 border-white/5 p-6 flex flex-col gap-6">
             <div>
-                <h3 class="text-xs font-bold tracking-widest text-slate-400 uppercase mb-3">Live Sniffer Status</h3>
+                <h3 class="text-xs font-bold tracking-widest text-slate-400 uppercase mb-3 flex justify-between items-center cursor-pointer select-none" onclick="toggleSection('sniffer')">
+                    <span>Live Sniffer Status</span>
+                    <span id="toggle-icon-sniffer" class="text-[10px] text-slate-500">▼</span>
+                </h3>
                 
-                <!-- Sniffer Status Widget -->
-                <div class="flex items-center justify-between p-3.5 bg-slate-950/60 rounded-lg border border-white/5">
-                    <div class="flex items-center gap-3">
-                        <span id="sniffer-status-indicator" class="relative flex h-3 w-3">
-                            <span class="animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 {% if sniffer_active %}bg-emerald-400{% else %}bg-red-400{% endif %}"></span>
-                            <span class="relative inline-flex rounded-full h-3 w-3 {% if sniffer_active %}bg-emerald-500{% else %}bg-red-500{% endif %}"></span>
-                        </span>
-                        <span id="sniffer-status-text" class="font-semibold text-sm font-mono tracking-wider {% if sniffer_active %}text-emerald-400{% else %}text-red-400{% endif %}">
-                            {% if sniffer_active %}ONLINE{% else %}OFFLINE{% endif %}
-                        </span>
+                <div id="sniffer-section-content" class="flex flex-col gap-2">
+                    <!-- Sniffer Status Widget -->
+                    <div class="flex items-center justify-between p-3.5 bg-slate-950/60 rounded-lg border border-white/5">
+                        <div class="flex items-center gap-3">
+                            <span id="sniffer-status-indicator" class="relative flex h-3 w-3">
+                                <span class="animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 {% if sniffer_active %}bg-emerald-400{% else %}bg-red-400{% endif %}"></span>
+                                <span class="relative inline-flex rounded-full h-3 w-3 {% if sniffer_active %}bg-emerald-500{% else %}bg-red-500{% endif %}"></span>
+                            </span>
+                            <span id="sniffer-status-text" class="font-semibold text-sm font-mono tracking-wider {% if sniffer_active %}text-emerald-400{% else %}text-red-400{% endif %}">
+                                {% if sniffer_active %}ONLINE{% else %}OFFLINE{% endif %}
+                            </span>
+                        </div>
+                        
+                        {% if not is_render %}
+                        <button id="sniffer-toggle-btn" 
+                                class="px-3 py-1 rounded text-xs font-semibold tracking-wider transition border 
+                                {% if sniffer_active %}bg-red-500/10 hover:bg-red-500/20 text-red-400 border-red-500/20{% else %}bg-blue-500/10 hover:bg-blue-500/20 text-blue-400 border-blue-500/20{% endif %}"
+                                onclick="toggleSniffer()">
+                            {% if sniffer_active %}STOP{% else %}START{% endif %}
+                        </button>
+                        {% endif %}
                     </div>
                     
-                    {% if not is_render %}
-                    <button id="sniffer-toggle-btn" 
-                            class="px-3 py-1 rounded text-xs font-semibold tracking-wider transition border 
-                            {% if sniffer_active %}bg-red-500/10 hover:bg-red-500/20 text-red-400 border-red-500/20{% else %}bg-blue-500/10 hover:bg-blue-500/20 text-blue-400 border-blue-500/20{% endif %}"
-                            onclick="toggleSniffer()">
-                        {% if sniffer_active %}STOP{% else %}START{% endif %}
-                    </button>
+                    {% if is_render %}
+                    <p class="text-xs text-yellow-500/80 mt-2 bg-yellow-500/5 border border-yellow-500/10 p-2 rounded">
+                        ⚠️ Cloud Sniffing is disabled on Render due to raw socket privilege limits and memory constraints.
+                    </p>
                     {% endif %}
                 </div>
-                
-                {% if is_render %}
-                <p class="text-xs text-yellow-500/80 mt-2 bg-yellow-500/5 border border-yellow-500/10 p-2 rounded">
-                    ⚠️ Cloud Sniffing is disabled on Render due to raw socket privilege limits and memory constraints.
-                </p>
-                {% endif %}
             </div>
             
             <hr class="border-white/5">
             
             <!-- Real-Time Console Logs -->
             <div class="flex-1 flex flex-col">
-                <h3 class="text-xs font-bold tracking-widest text-slate-400 uppercase mb-3 flex items-center justify-between">
-                    <span>Console Notifications</span>
-                    <div class="flex flex-col items-end gap-1">
+                <h3 class="text-xs font-bold tracking-widest text-slate-400 uppercase mb-3 flex items-center justify-between cursor-pointer select-none" onclick="toggleSection('console')">
+                    <span class="flex items-center gap-2">
+                        <span>Console Notifications</span>
+                        <span id="toggle-icon-console" class="text-[10px] text-slate-500">▼</span>
+                    </span>
+                    <div class="flex flex-col items-end gap-1" onclick="event.stopPropagation()">
                         <span id="socket-connection-badge" class="text-[10px] font-mono font-normal tracking-normal text-red-400 bg-red-400/10 border border-red-400/20 px-1.5 py-0.5 rounded">Disconnected</span>
                         <span id="poll-ticker" class="text-[10px] font-mono font-normal text-slate-600">sync: --</span>
                     </div>
                 </h3>
                 
-                <div id="console-logs" class="flex-1 min-h-[160px] max-h-[300px] md:max-h-none overflow-y-auto bg-slate-950/80 border border-white/5 rounded-lg p-3 font-mono text-[11px] text-slate-300 leading-relaxed flex flex-col gap-1.5">
-                    <div class="text-slate-500">[*] WebSockets listener initializing...</div>
+                <div id="console-section-content" class="flex-1 flex flex-col">
+                    <div id="console-logs" class="flex-1 min-h-[160px] max-h-[300px] md:max-h-none overflow-y-auto bg-slate-950/80 border border-white/5 rounded-lg p-3 font-mono text-[11px] text-slate-300 leading-relaxed flex flex-col gap-1.5">
+                        <div class="text-slate-500">[*] WebSockets listener initializing...</div>
+                    </div>
                 </div>
             </div>
         </aside>
@@ -422,6 +602,110 @@
         let timeBuckets = {};
         let countsByTime = [];
         let classesCount = {};
+
+        // -------------------------------------------------------------
+        // Theme Management & Chart Sync
+        // -------------------------------------------------------------
+        const THEME_COLORS = {
+            dark: {
+                purple: '#8b5cf6',
+                cyan: '#06b6d4',
+                emerald: '#10b981',
+                amber: '#f59e0b',
+                red: '#ef4444',
+                timelineBorder: '#06b6d4',
+                timelineBg: 'rgba(6, 182, 212, 0.05)',
+                pieColors: ['#10b981', '#ef4444', '#f59e0b', '#06b6d4', '#8b5cf6', '#d63031', '#ffeaa7'],
+            },
+            light: {
+                purple: '#6d28d9',
+                cyan: '#0891b2',
+                emerald: '#059669',
+                amber: '#d97706',
+                red: '#dc2626',
+                timelineBorder: '#0891b2',
+                timelineBg: 'rgba(8, 145, 178, 0.05)',
+                pieColors: ['#059669', '#dc2626', '#d97706', '#0891b2', '#6d28d9', '#b91c1c', '#f59e0b'],
+            }
+        };
+
+        function toggleTheme() {
+            const isLight = document.documentElement.classList.toggle('light');
+            localStorage.setItem('theme', isLight ? 'light' : 'dark');
+            
+            // Update button icon
+            const iconSpan = document.getElementById('theme-toggle-icon');
+            if (iconSpan) {
+                iconSpan.textContent = isLight ? '☀️' : '🌙';
+            }
+            
+            // Update charts
+            updateChartsTheme();
+        }
+
+        function toggleSection(sectionId) {
+            const content = document.getElementById(sectionId + '-section-content');
+            const icon = document.getElementById('toggle-icon-' + sectionId);
+            if (!content || !icon) return;
+            
+            const isHidden = content.classList.toggle('hidden');
+            icon.textContent = isHidden ? '▲' : '▼';
+            
+            // Save collapse state in localStorage
+            localStorage.setItem('collapse-' + sectionId, isHidden ? 'true' : 'false');
+        }
+
+        function updateChartsTheme() {
+            const isLight = document.documentElement.classList.contains('light');
+            const colors = isLight ? THEME_COLORS.light : THEME_COLORS.dark;
+            
+            const textColor = isLight ? '#1e293b' : 'rgba(255, 255, 255, 0.6)';
+            const gridColor = isLight ? 'rgba(0, 0, 0, 0.04)' : 'rgba(255, 255, 255, 0.03)';
+            const borderColor = isLight ? 'rgba(0, 0, 0, 0.06)' : 'rgba(255, 255, 255, 0.05)';
+            const cardBg = isLight ? '#ffffff' : '#141522';
+
+            Chart.defaults.color = textColor;
+            Chart.defaults.borderColor = borderColor;
+
+            const updateChartObj = (chart, isTimeline, isPie, isSeverity, isMethod) => {
+                if (!chart) return;
+                
+                if (chart.options.scales) {
+                    if (chart.options.scales.x && chart.options.scales.x.grid) {
+                        chart.options.scales.x.grid.color = gridColor;
+                    }
+                    if (chart.options.scales.y && chart.options.scales.y.grid) {
+                        chart.options.scales.y.grid.color = gridColor;
+                    }
+                }
+                
+                // Update specific dataset colors
+                if (isTimeline) {
+                    chart.data.datasets[0].borderColor = colors.timelineBorder;
+                    chart.data.datasets[0].backgroundColor = colors.timelineBg;
+                } else if (isPie) {
+                    chart.data.datasets[0].backgroundColor = colors.pieColors;
+                    chart.data.datasets[0].borderColor = cardBg;
+                } else if (isSeverity) {
+                    chart.data.datasets[0].backgroundColor = [
+                        colors.emerald,
+                        colors.amber,
+                        colors.red,
+                        isLight ? '#991b1b' : '#d63031'
+                    ];
+                } else if (isMethod) {
+                    chart.data.datasets[0].backgroundColor = [colors.cyan, colors.purple];
+                    chart.data.datasets[0].borderColor = cardBg;
+                }
+
+                chart.update();
+            };
+
+            updateChartObj(timelineChart, true, false, false, false);
+            updateChartObj(pieChart, false, true, false, false);
+            updateChartObj(severityChart, false, false, true, false);
+            updateChartObj(methodChart, false, false, false, true);
+        }
         
         // -------------------------------------------------------------
         // WebSocket Event Handler & UI binding
@@ -886,8 +1170,15 @@
         // Charts.js Initialization and Live Data Updates
         // -------------------------------------------------------------
         function initCharts() {
-            Chart.defaults.color = 'rgba(255, 255, 255, 0.6)';
-            Chart.defaults.borderColor = 'rgba(255, 255, 255, 0.05)';
+            const isLight = document.documentElement.classList.contains('light');
+            const colors = isLight ? THEME_COLORS.light : THEME_COLORS.dark;
+            const textColor = isLight ? '#1e293b' : 'rgba(255, 255, 255, 0.6)';
+            const gridColor = isLight ? 'rgba(0, 0, 0, 0.04)' : 'rgba(255, 255, 255, 0.03)';
+            const borderColor = isLight ? 'rgba(0, 0, 0, 0.06)' : 'rgba(255, 255, 255, 0.05)';
+            const cardBg = isLight ? '#ffffff' : '#141522';
+
+            Chart.defaults.color = textColor;
+            Chart.defaults.borderColor = borderColor;
             
             // 1. Timeline Chart
             const ctxTimeline = document.getElementById('chart-timeline').getContext('2d');
@@ -898,8 +1189,8 @@
                     datasets: [{
                         label: 'Captured Flows (10s intervals)',
                         data: [],
-                        borderColor: '#0984e3',
-                        backgroundColor: 'rgba(9, 132, 227, 0.05)',
+                        borderColor: colors.timelineBorder,
+                        backgroundColor: colors.timelineBg,
                         borderWidth: 2,
                         tension: 0.4,
                         fill: true
@@ -911,7 +1202,7 @@
                     scales: {
                         y: {
                             beginAtZero: true,
-                            grid: { color: 'rgba(255, 255, 255, 0.03)' }
+                            grid: { color: gridColor }
                         },
                         x: {
                             grid: { display: false }
@@ -928,9 +1219,9 @@
                     labels: [],
                     datasets: [{
                         data: [],
-                        backgroundColor: ['#00b894', '#ff7675', '#fdcb6e', '#0984e3', '#6c5ce7', '#d63031', '#ffeaa7'],
+                        backgroundColor: colors.pieColors,
                         borderWidth: 1,
-                        borderColor: 'rgba(10, 12, 18, 0.8)'
+                        borderColor: cardBg
                     }]
                 },
                 options: {
@@ -951,7 +1242,12 @@
                     datasets: [{
                         label: 'Threat Count',
                         data: [0, 0, 0, 0],
-                        backgroundColor: ['#00b894', '#fdcb6e', '#ff7675', '#d63031'],
+                        backgroundColor: [
+                            colors.emerald,
+                            colors.amber,
+                            colors.red,
+                            isLight ? '#991b1b' : '#d63031'
+                        ],
                         borderWidth: 0,
                         borderRadius: 4
                     }]
@@ -962,7 +1258,7 @@
                     scales: {
                         y: {
                             beginAtZero: true,
-                            grid: { color: 'rgba(255, 255, 255, 0.03)' }
+                            grid: { color: gridColor }
                         },
                         x: {
                             grid: { display: false }
@@ -979,9 +1275,9 @@
                     labels: ['Behavioral (ML)', 'Signature-based'],
                     datasets: [{
                         data: [0, 0],
-                        backgroundColor: ['#0984e3', '#6c5ce7'],
+                        backgroundColor: [colors.cyan, colors.purple],
                         borderWidth: 1,
-                        borderColor: 'rgba(10, 12, 18, 0.8)'
+                        borderColor: cardBg
                     }]
                 },
                 options: {
@@ -1008,21 +1304,19 @@
             severityChart.data.datasets[0].data = sevData;
             severityChart.update();
             
-            // Update signature vs behavioral method chart
-            const behavioral = stats.detection_method_breakdown.BEHAVIOR || 0;
-            const signature = stats.detection_method_breakdown.SIGNATURE || 0;
-            methodChart.data.datasets[0].data = [behavioral, signature];
+            // Update signature vs ML method chart
+            methodChart.data.datasets[0].data = [stats.ml_count, stats.signature_count];
             methodChart.update();
         }
         
+        // Timeline chart real-time stream data binder
         function updateChartsWithNewFlow(flow) {
-            // 1. Update timeline data points dynamically
-            const date = new Date(flow.timestamp);
-            // Group by 10 second buckets
-            const seconds = Math.floor(date.getSeconds() / 10) * 10;
-            date.setSeconds(seconds);
-            date.setMilliseconds(0);
-            const bucketStr = date.toLocaleTimeString();
+            const timeObj = new Date(flow.timestamp);
+            // Group by 10s buckets
+            const seconds = Math.floor(timeObj.getSeconds() / 10) * 10;
+            timeObj.setSeconds(seconds);
+            timeObj.setMilliseconds(0);
+            const bucketStr = timeObj.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
             
             if (timeBuckets[bucketStr]) {
                 timeBuckets[bucketStr] += 1;
@@ -1043,14 +1337,28 @@
             timelineChart.update();
         }
 
-        // Add additional API endpoints in dashboard.py for retrieving settings configs:
-        // In the background loop or startup logic, we fetch this endpoint:
-        // We will add the /api/settings/config route in dashboard.py next.
-        
         // -------------------------------------------------------------
         // Console Initializations
         // -------------------------------------------------------------
         window.addEventListener('DOMContentLoaded', () => {
+            // Apply initial theme state to the toggle icon
+            const isLight = document.documentElement.classList.contains('light');
+            const iconSpan = document.getElementById('theme-toggle-icon');
+            if (iconSpan) {
+                iconSpan.textContent = isLight ? '☀️' : '🌙';
+            }
+
+            // Restore section collapse states from localStorage
+            ['sniffer', 'console'].forEach(sec => {
+                const isCollapsed = localStorage.getItem('collapse-' + sec) === 'true';
+                if (isCollapsed) {
+                    const content = document.getElementById(sec + '-section-content');
+                    const icon = document.getElementById('toggle-icon-' + sec);
+                    if (content) content.classList.add('hidden');
+                    if (icon) icon.textContent = '▲';
+                }
+            });
+
             initCharts();
             fetchStats();
             fetchHistory();

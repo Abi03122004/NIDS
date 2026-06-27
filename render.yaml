@@ -3,7 +3,7 @@ services:
     name: network-ids-portal
     runtime: python
     buildCommand: pip install -r requirements.txt
-    startCommand: python dashboard.py
+    startCommand: gunicorn -w 1 --threads 100 -b 0.0.0.0:$PORT dashboard:app
     envVars:
       - key: SECRET_KEY
         generateValue: true
