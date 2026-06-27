@@ -6,6 +6,9 @@ import sys
 import time
 import queue
 import threading
+import select
+import struct
+import socket
 from datetime import datetime, timezone
 import joblib
 import numpy as np
@@ -17,6 +20,10 @@ try:
 except ImportError:
     print("[ERROR] Scapy package is not installed. Please run: pip install scapy")
     sys.exit(1)
+
+# Global raw packet sniffer thread components
+sniffer_thread = None
+sniffer_socket = None
 
 # Local imports for in-memory ML inference and SQLite logging
 from ml_model import predict_single, load_assets
@@ -78,8 +85,48 @@ class NetworkFlow:
 
     def add_packet(self, packet, direction: str):
         """Adds a packet to the flow and updates aggregated statistics."""
-        current_time = time.time()
         pkt_len = len(packet)
+        ip_header_len = 20
+        if packet.haslayer(scapy.IP):
+            ip_header_len = packet[scapy.IP].ihl * 4
+
+        transport_header_len = 0
+        tcp_flags_str = None
+        tcp_window = None
+        raw_payload = None
+        is_dns = False
+
+        if packet.haslayer(scapy.TCP):
+            tcp_layer = packet[scapy.TCP]
+            transport_header_len = tcp_layer.dataofs * 4
+            tcp_flags_str = str(tcp_layer.flags)
+            tcp_window = tcp_layer.window
+        elif packet.haslayer(scapy.UDP):
+            transport_header_len = 8
+            is_dns = packet.haslayer(scapy.DNS)
+
+        if packet.haslayer(scapy.Raw):
+            try:
+                raw_payload = packet[scapy.Raw].load.decode("utf-8", errors="ignore")
+            except Exception:
+                pass
+
+        # Call the fast parser internally
+        self.add_packet_fast(
+            pkt_len=pkt_len,
+            ip_header_len=ip_header_len,
+            transport_header_len=transport_header_len,
+            tcp_flags_str=tcp_flags_str,
+            tcp_window=tcp_window,
+            direction=direction,
+            raw_payload=raw_payload,
+            is_dns=is_dns,
+            raw_packet_bytes=bytes(packet[scapy.IP]) if packet.haslayer(scapy.IP) else None
+        )
+
+    def add_packet_fast(self, pkt_len: int, ip_header_len: int, transport_header_len: int, tcp_flags_str: str, tcp_window: int, direction: str, raw_payload: str = None, is_dns: bool = False, raw_packet_bytes: bytes = None):
+        """High-speed flow updates bypassing Scapy Packet creation."""
+        current_time = time.time()
         
         gap = current_time - self.last_active_time
         if gap > 1.0:
@@ -92,51 +139,39 @@ class NetworkFlow:
         self.last_active_time = current_time
         self.last_timestamp = current_time
         
-        ip_header_len = 20
-        if packet.haslayer(scapy.IP):
-            ip_header_len = packet[scapy.IP].ihl * 4
-
-        transport_header_len = 0
-        if packet.haslayer(scapy.TCP):
-            tcp_layer = packet[scapy.TCP]
-            transport_header_len = tcp_layer.dataofs * 4
-            self.tcp_flags.append(str(tcp_layer.flags))
-            
-            if direction == "fwd" and not self.fwd_packets:
-                self.init_win_fwd = tcp_layer.window
-                self.min_seg_size_fwd = transport_header_len
-            elif direction == "bwd" and not self.bwd_packets:
-                self.init_win_bwd = tcp_layer.window
-                
-        elif packet.haslayer(scapy.UDP):
-            transport_header_len = 8
-            
         total_header_len = ip_header_len + transport_header_len
         
+        if tcp_flags_str is not None:
+            self.tcp_flags.append(tcp_flags_str)
+            
         if direction == "fwd":
             self.fwd_packets.append(pkt_len)
             self.fwd_timestamps.append(current_time)
             self.fwd_header_len += total_header_len
+            if len(self.fwd_packets) == 1 and tcp_window is not None:
+                self.init_win_fwd = tcp_window
+                self.min_seg_size_fwd = transport_header_len
         else:
             self.bwd_packets.append(pkt_len)
             self.bwd_timestamps.append(current_time)
             self.bwd_header_len += total_header_len
+            if len(self.bwd_packets) == 1 and tcp_window is not None:
+                self.init_win_bwd = tcp_window
 
-        if not self.matched_signature and packet.haslayer(scapy.DNS):
-            try:
-                from signature_engine import inspect_dns_tunneling
-                sig = inspect_dns_tunneling(packet)
-                if sig:
-                    self.matched_signature = sig
-            except Exception:
-                pass
-
-        inspectable_ports = {80, 8080, 53, 21, 23, 25, 110, 143}
-        if not self.matched_signature and packet.haslayer(scapy.Raw):
-            if (self.dst_port in inspectable_ports or self.src_port in inspectable_ports):
+        if not self.matched_signature:
+            if is_dns and raw_packet_bytes:
                 try:
-                    raw_payload = packet[scapy.Raw].load.decode("utf-8", errors="ignore")
-                    protocol_name = "TCP" if packet.haslayer(scapy.TCP) else "UDP"
+                    # Construct scapy packet only if we need to parse DNS
+                    scapy_pkt = scapy.IP(raw_packet_bytes)
+                    from signature_engine import inspect_dns_tunneling
+                    sig = inspect_dns_tunneling(scapy_pkt)
+                    if sig:
+                        self.matched_signature = sig
+                except Exception:
+                    pass
+            elif raw_payload:
+                try:
+                    protocol_name = "TCP" if tcp_flags_str is not None else "UDP"
                     sig = match_payload_signature(raw_payload, protocol_name)
                     if sig:
                         self.matched_signature = sig
@@ -362,13 +397,12 @@ def extract_and_send_flow(flow: NetworkFlow):
         print(f"[ERROR] Ingestion logging failed: {e}")
 
 def packet_callback(packet):
-    """Processes captured packet, mapping it to bidirectional flow states."""
+    """Fallback Scapy packet callback. Maps packets to flow states using Scapy's representation."""
     if not (packet.haslayer(scapy.IP) and (packet.haslayer(scapy.TCP) or packet.haslayer(scapy.UDP))):
         return
-        
+    
     ip_layer = packet[scapy.IP]
     proto = ip_layer.proto
-    
     src_ip = ip_layer.src
     dst_ip = ip_layer.dst
     
@@ -393,10 +427,206 @@ def packet_callback(packet):
         flow = active_flows[flow_key]
         flow.add_packet(packet, direction)
         
-        # Flush TCP immediately on close to minimize latency
         if is_fin or is_rst:
             active_flows.pop(flow_key)
             inference_queue.put(flow)
+
+def process_raw_packet(cls, pkt_bytes: bytes, ts: float):
+    """High-speed raw packet parser using struct.unpack. Drops objects creation completely."""
+    try:
+        cls_name = cls.__name__ if hasattr(cls, "__name__") else str(cls)
+        l2_hdr_len = 14
+        ether_type = 0x0800
+        
+        if "Ether" in cls_name:
+            l2_hdr_len = 14
+            if len(pkt_bytes) >= 14:
+                ether_type = (pkt_bytes[12] << 8) | pkt_bytes[13]
+        elif "CookedLinux" in cls_name or "SLL" in cls_name:
+            l2_hdr_len = 16
+            if len(pkt_bytes) >= 16:
+                ether_type = (pkt_bytes[14] << 8) | pkt_bytes[15]
+        elif "Null" in cls_name or "Loopback" in cls_name:
+            l2_hdr_len = 4
+            if len(pkt_bytes) >= 4:
+                family = pkt_bytes[0]
+                ether_type = 0x0800 if family in (2, 24, 30) else 0
+        else:
+            l2_hdr_len = 14
+            if len(pkt_bytes) >= 14:
+                ether_type = (pkt_bytes[12] << 8) | pkt_bytes[13]
+                
+        if ether_type != 0x0800:
+            return
+            
+        ip_offset = l2_hdr_len
+        if len(pkt_bytes) < ip_offset + 20:
+            return
+            
+        # Parse IP header version and ihl
+        version_ihl = pkt_bytes[ip_offset]
+        version = version_ihl >> 4
+        if version != 4:
+            return
+        ihl = version_ihl & 0x0F
+        ip_header_len = ihl * 4
+        
+        if len(pkt_bytes) < ip_offset + ip_header_len:
+            return
+            
+        proto = pkt_bytes[ip_offset + 9]
+        if proto not in (6, 17):  # TCP or UDP
+            return
+            
+        # Faster than inet_ntoa
+        src_ip_bytes = pkt_bytes[ip_offset + 12 : ip_offset + 16]
+        dst_ip_bytes = pkt_bytes[ip_offset + 16 : ip_offset + 20]
+        src_ip = f"{src_ip_bytes[0]}.{src_ip_bytes[1]}.{src_ip_bytes[2]}.{src_ip_bytes[3]}"
+        dst_ip = f"{dst_ip_bytes[0]}.{dst_ip_bytes[1]}.{dst_ip_bytes[2]}.{dst_ip_bytes[3]}"
+        
+        transport_offset = ip_offset + ip_header_len
+        
+        is_fin = False
+        is_rst = False
+        tcp_flags_str = None
+        tcp_window = None
+        transport_header_len = 0
+        raw_payload = None
+        is_dns = False
+        
+        if proto == 6:  # TCP
+            if len(pkt_bytes) < transport_offset + 20:
+                return
+            src_port = (pkt_bytes[transport_offset] << 8) | pkt_bytes[transport_offset + 1]
+            dst_port = (pkt_bytes[transport_offset + 2] << 8) | pkt_bytes[transport_offset + 3]
+            
+            data_offset = (pkt_bytes[transport_offset + 12] >> 4) * 4
+            transport_header_len = data_offset
+            
+            flags_byte = pkt_bytes[transport_offset + 13]
+            is_fin = bool(flags_byte & 0x01)
+            is_rst = bool(flags_byte & 0x04)
+            
+            flags_list = []
+            if flags_byte & 0x01: flags_list.append("F")
+            if flags_byte & 0x02: flags_list.append("S")
+            if flags_byte & 0x04: flags_list.append("R")
+            if flags_byte & 0x08: flags_list.append("P")
+            if flags_byte & 0x10: flags_list.append("A")
+            if flags_byte & 0x20: flags_list.append("U")
+            tcp_flags_str = "".join(flags_list)
+            
+            tcp_window = (pkt_bytes[transport_offset + 14] << 8) | pkt_bytes[transport_offset + 15]
+            
+            payload_offset = transport_offset + data_offset
+            if len(pkt_bytes) > payload_offset:
+                raw_payload = pkt_bytes[payload_offset:].decode("utf-8", errors="ignore")
+                
+        elif proto == 17:  # UDP
+            if len(pkt_bytes) < transport_offset + 8:
+                return
+            src_port = (pkt_bytes[transport_offset] << 8) | pkt_bytes[transport_offset + 1]
+            dst_port = (pkt_bytes[transport_offset + 2] << 8) | pkt_bytes[transport_offset + 3]
+            transport_header_len = 8
+            
+            is_dns = (src_port == 53 or dst_port == 53)
+            
+            payload_offset = transport_offset + 8
+            if len(pkt_bytes) > payload_offset:
+                raw_payload = pkt_bytes[payload_offset:].decode("utf-8", errors="ignore")
+                
+        # Bidirectional flow indexing
+        flow_key = tuple(sorted([(src_ip, src_port), (dst_ip, dst_port)]) + [proto])
+        direction = "fwd" if (src_ip == flow_key[0][0] and src_port == flow_key[0][1]) else "bwd"
+        
+        with flow_lock:
+            if flow_key not in active_flows:
+                active_flows[flow_key] = NetworkFlow(src_ip, src_port, dst_ip, dst_port, proto)
+                
+            flow = active_flows[flow_key]
+            flow.add_packet_fast(
+                pkt_len=len(pkt_bytes),
+                ip_header_len=ip_header_len,
+                transport_header_len=transport_header_len,
+                tcp_flags_str=tcp_flags_str,
+                tcp_window=tcp_window,
+                direction=direction,
+                raw_payload=raw_payload,
+                is_dns=is_dns,
+                raw_packet_bytes=pkt_bytes[ip_offset:]
+            )
+            
+            if is_fin or is_rst:
+                active_flows.pop(flow_key)
+                inference_queue.put(flow)
+                
+    except Exception as e:
+        print(f"[WARNING] Error parsing raw packet: {e}")
+
+def recv_raw_nonblock(sock):
+    """Robust raw packet non-blocking receiver across Windows and Linux."""
+    try:
+        if hasattr(sock, "pcap_fd") and hasattr(sock.pcap_fd, "setnonblock"):
+            sock.pcap_fd.setnonblock(True)
+            try:
+                res = sock.recv_raw(65535)
+            finally:
+                sock.pcap_fd.setnonblock(False)
+            return res
+        else:
+            if hasattr(sock, "ins") and hasattr(sock.ins, "setblocking"):
+                sock.ins.setblocking(False)
+                try:
+                    res = sock.recv_raw(65535)
+                except (BlockingIOError, socket.error):
+                    return (None, None, None)
+                finally:
+                    sock.ins.setblocking(True)
+                return res
+            else:
+                try:
+                    r, _, _ = select.select([sock], [], [], 0.01)
+                    if sock in r:
+                        return sock.recv_raw(65535)
+                except Exception:
+                    pass
+                return (None, None, None)
+    except Exception:
+        return (None, None, None)
+
+def sniffer_loop(iface):
+    """Raw Libpcap sniffing thread utilizing kernel BPF filters and non-blocking polling."""
+    global sniffer_socket, stop_sniffer_event
+    
+    bpf_filter = "ip and (tcp or udp) and not (port 1900 or port 5353 or port 137 or port 138 or port 139 or port 123)"
+    print(f"[*] Initializing raw libpcap L2 socket on {iface} with BPF: {bpf_filter}")
+    
+    try:
+        sniffer_socket = scapy.conf.L2listen(iface=iface, filter=bpf_filter)
+    except Exception as e:
+        print(f"[ERROR] Failed to open L2 socket: {e}")
+        stop_sniffer_event.set()
+        return
+        
+    while not stop_sniffer_event.is_set():
+        try:
+            cls, pkt_bytes, ts = recv_raw_nonblock(sniffer_socket)
+            if pkt_bytes:
+                process_raw_packet(cls, pkt_bytes, ts)
+            else:
+                time.sleep(0.005)  # Responsive sleep to prevent high CPU utilization
+        except Exception as e:
+            if stop_sniffer_event.is_set():
+                break
+            print(f"[WARNING] Error in raw sniffer loop: {e}")
+            time.sleep(0.1)
+            
+    if sniffer_socket:
+        try:
+            sniffer_socket.close()
+        except Exception:
+            pass
+        sniffer_socket = None
 
 def inference_worker_loop():
     """Worker loop consuming flows from queue and running ML predictions in the background thread."""
@@ -438,8 +668,8 @@ def cleanup_expired_flows_loop():
                 inference_queue.put(flow)
 
 def start_sniffer_thread(interface=None):
-    """Spawns AsyncSniffer, worker, and cleanup threads. Used inside Flask server."""
-    global sniffer_instance, worker_thread, cleanup_thread, features_list, stop_sniffer_event
+    """Spawns raw L2 sniffer thread, inference consumer, and cleanup loops."""
+    global sniffer_thread, worker_thread, cleanup_thread, features_list, stop_sniffer_event
     
     if os.environ.get("RENDER"):
         print("[*] Skipping sniffer start: disabled inside cloud container sandbox.")
@@ -447,7 +677,6 @@ def start_sniffer_thread(interface=None):
         
     stop_sniffer_event.clear()
     
-    # Load ML assets
     try:
         load_assets()
         print("[*] Local ML assets loaded successfully.")
@@ -470,33 +699,23 @@ def start_sniffer_thread(interface=None):
     
     # Set default interface if none specified
     iface = interface or scapy.conf.iface
-    print(f"[*] Starting AsyncSniffer on adapter: {iface}")
     
-    try:
-        sniffer_instance = scapy.AsyncSniffer(
-            iface=iface,
-            filter="ip and (tcp or udp)",
-            prn=packet_callback,
-            store=0
-        )
-        sniffer_instance.start()
-        return True
-    except Exception as e:
-        print(f"[ERROR] AsyncSniffer failed to start: {e}")
-        stop_sniffer_event.set()
-        return False
+    sniffer_thread = threading.Thread(target=sniffer_loop, args=(iface,), daemon=True)
+    sniffer_thread.start()
+    return True
 
 def stop_sniffer_thread():
-    """Gracefully terminates background sniffing threads."""
-    global sniffer_instance, stop_sniffer_event
+    """Gracefully terminates background sniffing threads and closes open sockets."""
+    global sniffer_socket, stop_sniffer_event
     print("[*] Stopping AsyncSniffer background threads...")
     stop_sniffer_event.set()
     
-    if sniffer_instance and sniffer_instance.running:
+    if sniffer_socket:
         try:
-            sniffer_instance.stop()
+            sniffer_socket.close()
         except Exception:
             pass
+        sniffer_socket = None
             
     # Clean up heartbeat file
     try:
