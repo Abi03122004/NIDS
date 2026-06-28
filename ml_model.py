@@ -42,11 +42,17 @@ def load_assets():
     if os.path.exists(onnx_path):
         try:
             import onnxruntime as ort
-            # Optimize ONNX threads for web server workers
+            # Optimize ONNX threads and execution mode for web server workers
             opts = ort.SessionOptions()
-            opts.intra_op_num_threads = 1
-            opts.inter_op_num_threads = 1
-            onnx_session = ort.InferenceSession(onnx_path, sess_options=opts)
+            opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+            opts.intra_op_num_threads = 2
+            opts.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
+            
+            onnx_session = ort.InferenceSession(
+                onnx_path, 
+                sess_options=opts, 
+                providers=['CPUExecutionProvider']
+            )
             onnx_input_name = onnx_session.get_inputs()[0].name
             onnx_outputs = [o.name for o in onnx_session.get_outputs()]
             print("[*] Loaded optimized ONNX model successfully.")

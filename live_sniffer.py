@@ -22,8 +22,21 @@ except ImportError:
     sys.exit(1)
 
 # Global raw packet sniffer thread components
-sniffer_thread = None
-sniffer_socket = None
+sniffer_threads = []
+sniffer_sockets = []
+
+def get_loopback_interface():
+    try:
+        import scapy.all as scapy
+        for iface in scapy.get_working_ifaces():
+            name_lower = iface.name.lower()
+            desc_lower = iface.description.lower() if iface.description else ""
+            guid = iface.guid if hasattr(iface, "guid") else ""
+            if "loopback" in name_lower or "loopback" in desc_lower or "npf_loopback" in str(guid).lower():
+                return iface.name
+    except Exception:
+        pass
+    return None
 
 # Local imports for in-memory ML inference and SQLite logging
 from ml_model import predict_single, load_assets
@@ -576,24 +589,24 @@ def process_raw_packet(cls, pkt_bytes: bytes, ts: float):
         if len(pkt_bytes) < ip_offset + 20:
             return
             
-        # Parse IP header version and ihl
-        version_ihl = pkt_bytes[ip_offset]
+        # Optimization: Slice exactly 20 bytes belonging to the IPv4 header and unpack
+        ip_hdr = struct.unpack('!BBHHHBBH4s4s', pkt_bytes[ip_offset : ip_offset + 20])
+        version_ihl = ip_hdr[0]
         version = version_ihl >> 4
         if version != 4:
             return
+            
         ihl = version_ihl & 0x0F
         ip_header_len = ihl * 4
-        
         if len(pkt_bytes) < ip_offset + ip_header_len:
             return
             
-        proto = pkt_bytes[ip_offset + 9]
+        proto = ip_hdr[6]
         if proto not in (6, 17):  # TCP or UDP
             return
             
-        # Faster than inet_ntoa
-        src_ip_bytes = pkt_bytes[ip_offset + 12 : ip_offset + 16]
-        dst_ip_bytes = pkt_bytes[ip_offset + 16 : ip_offset + 20]
+        src_ip_bytes = ip_hdr[8]
+        dst_ip_bytes = ip_hdr[9]
         src_ip = f"{src_ip_bytes[0]}.{src_ip_bytes[1]}.{src_ip_bytes[2]}.{src_ip_bytes[3]}"
         dst_ip = f"{dst_ip_bytes[0]}.{dst_ip_bytes[1]}.{dst_ip_bytes[2]}.{dst_ip_bytes[3]}"
         
@@ -707,23 +720,44 @@ def recv_raw_nonblock(sock):
     except Exception:
         return (None, None, None)
 
+def patch_scapy_pcap_buffer_size(buffer_size_mb=16):
+    """Monkeypatches Scapy's raw pcap wrapper to expand the kernel ring buffer size to 16MB before activation."""
+    try:
+        import scapy.libs.winpcapy as winpcapy
+        if hasattr(winpcapy, "pcap_create") and hasattr(winpcapy, "pcap_set_buffer_size"):
+            orig_pcap_create = winpcapy.pcap_create
+            
+            def patched_pcap_create(device, errbuf):
+                handle = orig_pcap_create(device, errbuf)
+                if handle:
+                    buf_size = buffer_size_mb * 1024 * 1024
+                    winpcapy.pcap_set_buffer_size(handle, buf_size)
+                    print(f"[*] Expanded Npcap kernel buffer size to {buffer_size_mb} MB")
+                return handle
+                
+            winpcapy.pcap_create = patched_pcap_create
+    except Exception as e:
+        print(f"[WARNING] Could not patch Npcap kernel buffer size: {e}")
+
 def sniffer_loop(iface):
     """Raw Libpcap sniffing thread utilizing kernel BPF filters and non-blocking polling."""
-    global sniffer_socket, stop_sniffer_event
+    global stop_sniffer_event
     
     bpf_filter = "ip and (tcp or udp) and not (port 1900 or port 5353 or port 137 or port 138 or port 139 or port 123)"
     print(f"[*] Initializing raw libpcap L2 socket on {iface} with BPF: {bpf_filter}")
     
     try:
-        sniffer_socket = scapy.conf.L2listen(iface=iface, filter=bpf_filter)
+        sock = scapy.conf.L2listen(iface=iface, filter=bpf_filter)
+        with flow_lock:
+            sniffer_sockets.append(sock)
     except Exception as e:
-        print(f"[ERROR] Failed to open L2 socket: {e}")
+        print(f"[ERROR] Failed to open L2 socket on {iface}: {e}")
         stop_sniffer_event.set()
         return
         
     while not stop_sniffer_event.is_set():
         try:
-            cls, pkt_bytes, ts = recv_raw_nonblock(sniffer_socket)
+            cls, pkt_bytes, ts = recv_raw_nonblock(sock)
             if pkt_bytes:
                 process_raw_packet(cls, pkt_bytes, ts)
             else:
@@ -731,15 +765,16 @@ def sniffer_loop(iface):
         except Exception as e:
             if stop_sniffer_event.is_set():
                 break
-            print(f"[WARNING] Error in raw sniffer loop: {e}")
+            print(f"[WARNING] Error in raw sniffer loop on {iface}: {e}")
             time.sleep(0.1)
             
-    if sniffer_socket:
-        try:
-            sniffer_socket.close()
-        except Exception:
-            pass
-        sniffer_socket = None
+    try:
+        sock.close()
+    except Exception:
+        pass
+    with flow_lock:
+        if sock in sniffer_sockets:
+            sniffer_sockets.remove(sock)
 
 def inference_worker_loop():
     """Worker loop consuming flows from queue and running ML predictions in the background thread."""
@@ -754,9 +789,9 @@ def inference_worker_loop():
             print(f"[ERROR] Inference worker failed: {e}")
 
 def cleanup_expired_flows_loop():
-    """Periodic cleaner checking for aged flows (TCP > 30s, UDP > 10s idle) and evicting them to the queue."""
+    """Background cleaner that sweeps active flows tracking dictionary every 60 seconds to prevent leaks."""
     while not stop_sniffer_event.is_set():
-        time.sleep(CLEANUP_INTERVAL)
+        time.sleep(60)  # Sleep once a minute
         current_time = time.time()
         
         # Heartbeat sync
@@ -769,25 +804,28 @@ def cleanup_expired_flows_loop():
         except Exception:
             pass
             
-        expired = []
         with flow_lock:
-            for key, flow in list(active_flows.items()):
-                timeout = TIMEOUT_TCP if flow.protocol == 6 else TIMEOUT_UDP
-                if current_time - flow.last_timestamp > timeout:
-                    expired.append(key)
-                    
-            for key in expired:
-                flow = active_flows.pop(key)
-                inference_queue.put(flow)
+            # Purge stale inactive tracking states safely
+            stale_keys = [
+                key for key, flow in active_flows.items()
+                if current_time - flow.last_timestamp > 30
+            ]
+            
+            for key in stale_keys:
+                flow = active_flows.pop(key, None)
+                if flow:
+                    # If it's a multi-packet flow or TCP, queue it for threat detection;
+                    # otherwise (single-packet UDP noise), delete it silently to prevent leak/bloat.
+                    if (flow.fwd_count + flow.bwd_count > 1) or (flow.protocol == 6):
+                        inference_queue.put(flow)
 
 def is_sniffer_active():
-    """Checks if the raw packet sniffer thread is running and active."""
-    global sniffer_thread
-    return sniffer_thread is not None and sniffer_thread.is_alive()
+    """Checks if any raw packet sniffer thread is running and active."""
+    return any(t.is_alive() for t in sniffer_threads)
 
 def start_sniffer_thread(interface=None):
     """Spawns raw L2 sniffer thread, inference consumer, and cleanup loops."""
-    global sniffer_thread, worker_thread, cleanup_thread, features_list, stop_sniffer_event
+    global sniffer_threads, worker_thread, cleanup_thread, features_list, stop_sniffer_event
     
     if os.environ.get("RENDER"):
         print("[*] Skipping sniffer start: disabled inside cloud container sandbox.")
@@ -798,6 +836,9 @@ def start_sniffer_thread(interface=None):
         return True
         
     stop_sniffer_event.clear()
+    
+    # Expand the Npcap kernel buffer size to 16MB directly before activation
+    patch_scapy_pcap_buffer_size(16)
     
     try:
         load_assets()
@@ -822,30 +863,44 @@ def start_sniffer_thread(interface=None):
     # Set default interface if none specified
     iface = interface or scapy.conf.iface
     
-    sniffer_thread = threading.Thread(target=sniffer_loop, args=(iface,), daemon=True)
-    sniffer_thread.start()
+    sniffer_threads.clear()
+    t1 = threading.Thread(target=sniffer_loop, args=(iface,), daemon=True)
+    t1.start()
+    sniffer_threads.append(t1)
+    
+    # Check if we should also sniff on the loopback adapter for local-to-local scans
+    loopback_iface = get_loopback_interface()
+    if loopback_iface and loopback_iface != iface:
+        print(f"[*] Spawning secondary sniffer thread on Loopback interface: {loopback_iface}")
+        t2 = threading.Thread(target=sniffer_loop, args=(loopback_iface,), daemon=True)
+        t2.start()
+        sniffer_threads.append(t2)
+        
     return True
 
 def stop_sniffer_thread():
     """Gracefully terminates background sniffing threads and closes open sockets."""
-    global sniffer_socket, stop_sniffer_event, sniffer_thread
+    global sniffer_sockets, stop_sniffer_event, sniffer_threads
     print("[*] Stopping AsyncSniffer background threads...")
     stop_sniffer_event.set()
     
-    if sniffer_socket:
-        try:
-            sniffer_socket.close()
-        except Exception:
-            pass
-        sniffer_socket = None
+    with flow_lock:
+        for sock in sniffer_sockets:
+            try:
+                sock.close()
+            except Exception:
+                pass
+        sniffer_sockets.clear()
         
-    # Wait for background thread to exit cleanly
-    if sniffer_thread and sniffer_thread.is_alive():
-        try:
-            sniffer_thread.join(timeout=1.0)
-        except Exception:
-            pass
-            
+    # Wait for background threads to exit cleanly
+    for t in sniffer_threads:
+        if t.is_alive():
+            try:
+                t.join(timeout=1.0)
+            except Exception:
+                pass
+    sniffer_threads.clear()
+    
     # Clean up heartbeat file
     try:
         base_dir = os.path.dirname(os.path.abspath(__file__))
