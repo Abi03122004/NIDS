@@ -13,3 +13,5 @@ gunicorn
 onnxruntime
 skl2onnx
 redis
+ollama
+
