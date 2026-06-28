@@ -32,6 +32,7 @@ from severity_engine import evaluate_threat_state
 from notification_engine import dispatch_alert
 from signature_engine import match_port_signature, match_payload_signature
 from incident_manager import process_anomaly
+from message_broker import broker
 
 # Flow aging timeouts
 TIMEOUT_TCP = 30.0
@@ -49,7 +50,6 @@ sniffer_instance = None
 worker_thread = None
 cleanup_thread = None
 stop_sniffer_event = threading.Event()
-socketio_instance = None
 
 class NetworkFlow:
     """Tracks state and aggregates packets for a single bidirectional network flow."""
@@ -480,20 +480,19 @@ def extract_and_send_flow(flow: NetworkFlow):
             details=details
         )
         
-        # Broadcast via WebSockets
-        if socketio_instance:
-            socketio_instance.emit("new_flow", {
-                "id": row_id,
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-                "src_ip": flow.src_ip,
-                "dst_ip": flow.dst_ip,
-                "dst_port": flow.dst_port,
-                "prediction": pred,
-                "severity": severity,
-                "confidence": float(conf),
-                "detection_method": det_method,
-                "details": details
-            })
+        # Broadcast via Decoupled Message Broker
+        broker.publish("new_flow", {
+            "id": row_id,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "src_ip": flow.src_ip,
+            "dst_ip": flow.dst_ip,
+            "dst_port": flow.dst_port,
+            "prediction": pred,
+            "severity": severity,
+            "confidence": float(conf),
+            "detection_method": det_method,
+            "details": details
+        })
         
         if pred != "BENIGN":
             process_anomaly(

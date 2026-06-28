@@ -10,20 +10,21 @@ from typing import Dict, Any, List, Optional
 
 from database import get_connection
 from notification_engine import dispatch_alert
+from message_broker import broker
 
 # Incident aggregation thresholds
 ANOMALY_THRESHOLD = 5  # Number of related anomalies to trigger an urgent notification
+IP_SCAN_THRESHOLD = 15  # Distinct ports within 10 seconds to classify as IP/Port scan
 WINDOW_SECONDS = 120.0  # Sliding time window lookback (2 minutes to catch low-and-slow)
 STALE_TIMEOUT_SECONDS = 30.0  # Seconds of inactivity before resolving an incident
 
-# In-memory sliding window tracking databases
+# Rate limiters (track window timestamps per key)
 anomaly_timestamps = defaultdict(list)
 port_scan_history = defaultdict(list)
 
 # Global in-memory dictionary for ongoing active incidents
 active_incidents = {}
 active_incidents_lock = threading.Lock()
-socketio_instance = None
 
 def get_active_incidents() -> List[Dict[str, Any]]:
     """Returns a list of all active incidents currently tracked in memory."""
@@ -118,9 +119,8 @@ def process_anomaly(
                 
             active_incidents[history_key] = inc
 
-        # Emit SocketIO real-time update
-        if socketio_instance:
-            socketio_instance.emit("new_incident", inc)
+        # Broadcast via Decoupled Message Broker
+        broker.publish("new_incident", inc)
 
 def trigger_incident_notification(
     src_ip: str,
@@ -187,11 +187,11 @@ def check_expired_incidents_loop():
                 try:
                     inc["status"] = "RESOLVED"
                     save_resolved_incident_to_db(inc)
-                    if socketio_instance:
-                        socketio_instance.emit("incident_resolved", {
-                            "src_ip": inc["src_ip"],
-                            "attack_type": inc["attack_type"]
-                        })
+                    # Broadcast via Decoupled Message Broker
+                    broker.publish("incident_resolved", {
+                        "src_ip": inc["src_ip"],
+                        "attack_type": inc["attack_type"]
+                    })
                 except Exception as e:
                     print(f"[ERROR] Failed to save resolved incident to SQLite: {e}")
 

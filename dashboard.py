@@ -16,6 +16,7 @@ from severity_engine import evaluate_threat_state
 from notification_engine import load_config, save_config, send_telegram_message, send_email_message
 import live_sniffer
 import incident_manager
+from message_broker import broker
 
 # Auto-initialize database if users table is missing
 def check_db_initialized():
@@ -39,9 +40,10 @@ app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", secrets.token_hex(24))
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading")
 
-# Bind SocketIO instance to background threads to allow direct broadcasts
-live_sniffer.socketio_instance = socketio
-incident_manager.socketio_instance = socketio
+# Start background subscriber workers to forward messages from broker to SocketIO
+broker.start_subscriber("new_flow", lambda msg: socketio.emit("new_flow", msg))
+broker.start_subscriber("new_incident", lambda msg: socketio.emit("new_incident", msg))
+broker.start_subscriber("incident_resolved", lambda msg: socketio.emit("incident_resolved", msg))
 
 # Helper functions
 def get_current_user():
