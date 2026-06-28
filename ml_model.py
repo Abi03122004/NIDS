@@ -17,24 +17,53 @@ FEATURES_PATH = os.path.join(BASE_DIR, "features.pkl")
 model = None
 encoder = None
 features_list = None
+onnx_session = None
+onnx_input_name = None
+onnx_outputs = None
 
 def load_assets():
     """Loads model, label encoder, and feature list from disk if not already loaded."""
-    global model, encoder, features_list
-    if model is not None and encoder is not None and features_list is not None:
+    global model, encoder, features_list, onnx_session, onnx_input_name, onnx_outputs
+    if encoder is not None and features_list is not None and (model is not None or onnx_session is not None):
         return
         
-    if not os.path.exists(MODEL_PATH) or not os.path.exists(ENCODER_PATH) or not os.path.exists(FEATURES_PATH):
+    # Check if features and encoder are present
+    if not os.path.exists(ENCODER_PATH) or not os.path.exists(FEATURES_PATH):
         raise FileNotFoundError(
             f"Required model asset files are missing at project root. "
-            f"Expected {MODEL_PATH}, {ENCODER_PATH}, and {FEATURES_PATH}."
+            f"Expected {ENCODER_PATH} and {FEATURES_PATH}."
         )
         
-    model = joblib.load(MODEL_PATH)
-    # Set n_jobs to 1 to prevent thread thrashing in web server workers
-    model.n_jobs = 1
     encoder = joblib.load(ENCODER_PATH)
     features_list = joblib.load(FEATURES_PATH)
+    
+    # Try to load ONNX model
+    onnx_path = os.path.join(BASE_DIR, "ids_model.onnx")
+    if os.path.exists(onnx_path):
+        try:
+            import onnxruntime as ort
+            # Optimize ONNX threads for web server workers
+            opts = ort.SessionOptions()
+            opts.intra_op_num_threads = 1
+            opts.inter_op_num_threads = 1
+            onnx_session = ort.InferenceSession(onnx_path, sess_options=opts)
+            onnx_input_name = onnx_session.get_inputs()[0].name
+            onnx_outputs = [o.name for o in onnx_session.get_outputs()]
+            print("[*] Loaded optimized ONNX model successfully.")
+            return
+        except Exception as e:
+            print(f"[WARNING] Failed to load ONNX model, falling back to scikit-learn pkl: {e}")
+            onnx_session = None
+            
+    # Fallback to standard scikit-learn model
+    if not os.path.exists(MODEL_PATH):
+        raise FileNotFoundError(
+            f"Both ONNX and scikit-learn pickle model files are missing. "
+            f"Expected {onnx_path} or {MODEL_PATH}."
+        )
+    print("[*] Loading standard scikit-learn pickle model...")
+    model = joblib.load(MODEL_PATH)
+    model.n_jobs = 1
 
 def get_classes() -> List[str]:
     """Returns the list of target classes predicted by the model."""
@@ -84,19 +113,32 @@ def predict_single(features: List[Optional[float]]) -> Dict[str, Any]:
     
     sanitized_features, imputed_count, imputed_indices = validate_and_impute(features)
     
-    # Convert to DataFrame with feature names to match training header ordering
-    feat_df = pd.DataFrame([sanitized_features], columns=features_list)
-    
-    # Predict
-    pred_idx = model.predict(feat_df)[0]
-    pred_label = encoder.inverse_transform([pred_idx])[0]
-    
-    # Class probabilities
-    prob_array = model.predict_proba(feat_df)[0]
-    class_probs = {
-        class_name: float(prob)
-        for class_name, prob in zip(encoder.classes_, prob_array)
-    }
+    if onnx_session is not None:
+        # Run ONNX inference
+        feat_arr = np.array([sanitized_features], dtype=np.float32)
+        res = onnx_session.run(onnx_outputs, {onnx_input_name: feat_arr})
+        pred_idx = res[0][0]
+        prob_dict = res[1][0]
+        
+        pred_label = encoder.inverse_transform([pred_idx])[0]
+        class_probs = {
+            encoder.classes_[idx]: float(prob)
+            for idx, prob in prob_dict.items()
+        }
+    else:
+        # Convert to DataFrame with feature names to match training header ordering
+        feat_df = pd.DataFrame([sanitized_features], columns=features_list)
+        
+        # Predict
+        pred_idx = model.predict(feat_df)[0]
+        pred_label = encoder.inverse_transform([pred_idx])[0]
+        
+        # Class probabilities
+        prob_array = model.predict_proba(feat_df)[0]
+        class_probs = {
+            class_name: float(prob)
+            for class_name, prob in zip(encoder.classes_, prob_array)
+        }
     
     latency = (time.time() - start_time) * 1000.0
     
@@ -132,23 +174,45 @@ def predict_batch(inputs: List[List[Optional[float]]]) -> Dict[str, Any]:
         except Exception as e:
             raise ValueError(f"Validation error at batch index {idx}: {str(e)}")
             
-    feat_df = pd.DataFrame(sanitized_batch, columns=features_list)
-    pred_indices = model.predict(feat_df)
-    pred_labels = encoder.inverse_transform(pred_indices)
-    prob_arrays = model.predict_proba(feat_df)
-    
-    predictions = []
-    for i in range(len(inputs)):
-        class_probs = {
-            class_name: float(prob)
-            for class_name, prob in zip(encoder.classes_, prob_arrays[i])
-        }
-        predictions.append({
-            "prediction": pred_labels[i],
-            "class_probabilities": class_probs,
-            "imputed_count": imputed_counts[i],
-            "imputed_indices": imputed_indices_list[i]
-        })
+    if onnx_session is not None:
+        feat_arr = np.array(sanitized_batch, dtype=np.float32)
+        res = onnx_session.run(onnx_outputs, {onnx_input_name: feat_arr})
+        pred_indices = res[0]
+        prob_list = res[1]
+        
+        pred_labels = encoder.inverse_transform(pred_indices)
+        
+        predictions = []
+        for i in range(len(inputs)):
+            prob_dict = prob_list[i]
+            class_probs = {
+                encoder.classes_[idx]: float(prob)
+                for idx, prob in prob_dict.items()
+            }
+            predictions.append({
+                "prediction": pred_labels[i],
+                "class_probabilities": class_probs,
+                "imputed_count": imputed_counts[i],
+                "imputed_indices": imputed_indices_list[i]
+            })
+    else:
+        feat_df = pd.DataFrame(sanitized_batch, columns=features_list)
+        pred_indices = model.predict(feat_df)
+        pred_labels = encoder.inverse_transform(pred_indices)
+        prob_arrays = model.predict_proba(feat_df)
+        
+        predictions = []
+        for i in range(len(inputs)):
+            class_probs = {
+                class_name: float(prob)
+                for class_name, prob in zip(encoder.classes_, prob_arrays[i])
+            }
+            predictions.append({
+                "prediction": pred_labels[i],
+                "class_probabilities": class_probs,
+                "imputed_count": imputed_counts[i],
+                "imputed_indices": imputed_indices_list[i]
+            })
         
     latency = (time.time() - start_time) * 1000.0
     

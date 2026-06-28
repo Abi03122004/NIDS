@@ -10,4 +10,5 @@ Werkzeug
 Flask-SocketIO
 eventlet
 gunicorn
-
+onnxruntime
+skl2onnx
