@@ -83,6 +83,56 @@ class NetworkFlow:
         self.idle_periods = []
         self.is_active = True
 
+        # Incremental running stats
+        self.fwd_sum = 0
+        self.bwd_sum = 0
+        
+        self.last_fwd_timestamp = 0.0
+        self.last_bwd_timestamp = 0.0
+        self.first_fwd_timestamp = 0.0
+        self.first_bwd_timestamp = 0.0
+        
+        self.act_data_pkt_fwd_cnt = 0
+        self.flag_counts = {}
+        
+        # Welford algorithm states for Packet Lengths
+        self.fwd_count = 0
+        self.fwd_mean = 0.0
+        self.fwd_M2 = 0.0
+        self.fwd_max = 0.0
+        self.fwd_min = 999999999.0
+        
+        self.bwd_count = 0
+        self.bwd_mean = 0.0
+        self.bwd_M2 = 0.0
+        self.bwd_max = 0.0
+        self.bwd_min = 999999999.0
+        
+        self.all_count = 0
+        self.all_mean = 0.0
+        self.all_M2 = 0.0
+        self.all_max = 0.0
+        self.all_min = 999999999.0
+        
+        # Welford algorithm states for Inter-Arrival Times (IAT)
+        self.flow_iat_count = 0
+        self.flow_iat_mean = 0.0
+        self.flow_iat_M2 = 0.0
+        self.flow_iat_max = 0.0
+        self.flow_iat_min = 999999999.0
+        
+        self.fwd_iat_count = 0
+        self.fwd_iat_mean = 0.0
+        self.fwd_iat_M2 = 0.0
+        self.fwd_iat_max = 0.0
+        self.fwd_iat_min = 999999999.0
+        
+        self.bwd_iat_count = 0
+        self.bwd_iat_mean = 0.0
+        self.bwd_iat_M2 = 0.0
+        self.bwd_iat_max = 0.0
+        self.bwd_iat_min = 999999999.0
+
     def add_packet(self, packet, direction: str):
         """Adds a packet to the flow and updates aggregated statistics."""
         pkt_len = len(packet)
@@ -137,17 +187,64 @@ class NetworkFlow:
             self.first_timestamp = current_time
             
         self.last_active_time = current_time
+        
+        # Calculate Flow IAT
+        if self.all_count > 0:
+            iat = (current_time - self.last_timestamp) * 1000000.0
+            self.flow_iat_count += 1
+            delta = iat - self.flow_iat_mean
+            self.flow_iat_mean += delta / self.flow_iat_count
+            self.flow_iat_M2 += delta * (iat - self.flow_iat_mean)
+            if iat > self.flow_iat_max: self.flow_iat_max = iat
+            if iat < self.flow_iat_min: self.flow_iat_min = iat
+            
         self.last_timestamp = current_time
         
         total_header_len = ip_header_len + transport_header_len
         
         if tcp_flags_str is not None:
             self.tcp_flags.append(tcp_flags_str)
+            for flag in tcp_flags_str:
+                self.flag_counts[flag] = self.flag_counts.get(flag, 0) + 1
             
+        # Update All Packet Length stats
+        self.all_count += 1
+        delta = pkt_len - self.all_mean
+        self.all_mean += delta / self.all_count
+        self.all_M2 += delta * (pkt_len - self.all_mean)
+        if pkt_len > self.all_max: self.all_max = pkt_len
+        if pkt_len < self.all_min: self.all_min = pkt_len
+        
         if direction == "fwd":
             self.fwd_packets.append(pkt_len)
             self.fwd_timestamps.append(current_time)
             self.fwd_header_len += total_header_len
+            self.fwd_sum += pkt_len
+            if pkt_len > 0:
+                self.act_data_pkt_fwd_cnt += 1
+                
+            # Welford for Fwd Lengths
+            self.fwd_count += 1
+            delta = pkt_len - self.fwd_mean
+            self.fwd_mean += delta / self.fwd_count
+            self.fwd_M2 += delta * (pkt_len - self.fwd_mean)
+            if pkt_len > self.fwd_max: self.fwd_max = pkt_len
+            if pkt_len < self.fwd_min: self.fwd_min = pkt_len
+            
+            # Fwd IAT Welford
+            if self.last_fwd_timestamp > 0.0:
+                fwd_iat = (current_time - self.last_fwd_timestamp) * 1000000.0
+                self.fwd_iat_count += 1
+                delta = fwd_iat - self.fwd_iat_mean
+                self.fwd_iat_mean += delta / self.fwd_iat_count
+                self.fwd_iat_M2 += delta * (fwd_iat - self.fwd_iat_mean)
+                if fwd_iat > self.fwd_iat_max: self.fwd_iat_max = fwd_iat
+                if fwd_iat < self.fwd_iat_min: self.fwd_iat_min = fwd_iat
+            else:
+                self.first_fwd_timestamp = current_time
+                
+            self.last_fwd_timestamp = current_time
+            
             if len(self.fwd_packets) == 1 and tcp_window is not None:
                 self.init_win_fwd = tcp_window
                 self.min_seg_size_fwd = transport_header_len
@@ -155,6 +252,30 @@ class NetworkFlow:
             self.bwd_packets.append(pkt_len)
             self.bwd_timestamps.append(current_time)
             self.bwd_header_len += total_header_len
+            self.bwd_sum += pkt_len
+            
+            # Welford for Bwd Lengths
+            self.bwd_count += 1
+            delta = pkt_len - self.bwd_mean
+            self.bwd_mean += delta / self.bwd_count
+            self.bwd_M2 += delta * (pkt_len - self.bwd_mean)
+            if pkt_len > self.bwd_max: self.bwd_max = pkt_len
+            if pkt_len < self.bwd_min: self.bwd_min = pkt_len
+            
+            # Bwd IAT Welford
+            if self.last_bwd_timestamp > 0.0:
+                bwd_iat = (current_time - self.last_bwd_timestamp) * 1000000.0
+                self.bwd_iat_count += 1
+                delta = bwd_iat - self.bwd_iat_mean
+                self.bwd_iat_mean += delta / self.bwd_iat_count
+                self.bwd_iat_M2 += delta * (bwd_iat - self.bwd_iat_mean)
+                if bwd_iat > self.bwd_iat_max: self.bwd_iat_max = bwd_iat
+                if bwd_iat < self.bwd_iat_min: self.bwd_iat_min = bwd_iat
+            else:
+                self.first_bwd_timestamp = current_time
+                
+            self.last_bwd_timestamp = current_time
+            
             if len(self.bwd_packets) == 1 and tcp_window is not None:
                 self.init_win_bwd = tcp_window
 
@@ -180,6 +301,7 @@ class NetworkFlow:
 
     def get_features(self) -> Dict[str, float]:
         """Computes and returns the 78 flow features mapping to the CICIDS2017 set."""
+        import math
         duration_sec = self.last_timestamp - self.first_timestamp
         duration_ms = duration_sec * 1000.0
         duration_us = duration_sec * 1000000.0
@@ -187,31 +309,23 @@ class NetworkFlow:
             duration_sec = 0.00001
             duration_us = 10.0
             
-        fwd_cnt = len(self.fwd_packets)
-        bwd_cnt = len(self.bwd_packets)
+        fwd_cnt = self.fwd_count
+        bwd_cnt = self.bwd_count
         total_cnt = fwd_cnt + bwd_cnt
         
-        fwd_sum = sum(self.fwd_packets)
-        bwd_sum = sum(self.bwd_packets)
+        fwd_sum = self.fwd_sum
+        bwd_sum = self.bwd_sum
         total_sum = fwd_sum + bwd_sum
         
-        fwd_mean = np.mean(self.fwd_packets) if fwd_cnt else 0.0
-        fwd_std = np.std(self.fwd_packets) if fwd_cnt else 0.0
-        fwd_max = max(self.fwd_packets) if fwd_cnt else 0.0
-        fwd_min = min(self.fwd_packets) if fwd_cnt else 0.0
+        fwd_mean = self.fwd_mean
+        fwd_std = math.sqrt(self.fwd_M2 / fwd_cnt) if fwd_cnt > 0 else 0.0
+        fwd_max = self.fwd_max
+        fwd_min = self.fwd_min if fwd_cnt > 0 else 0.0
         
-        bwd_mean = np.mean(self.bwd_packets) if bwd_cnt else 0.0
-        bwd_std = np.std(self.bwd_packets) if bwd_cnt else 0.0
-        bwd_max = max(self.bwd_packets) if bwd_cnt else 0.0
-        bwd_min = min(self.bwd_packets) if bwd_cnt else 0.0
-        
-        all_timestamps = sorted(self.fwd_timestamps + self.bwd_timestamps)
-        flow_iats = np.diff(all_timestamps) * 1000000.0 if len(all_timestamps) > 1 else []
-        fwd_iats = np.diff(self.fwd_timestamps) * 1000000.0 if len(self.fwd_timestamps) > 1 else []
-        bwd_iats = np.diff(self.bwd_timestamps) * 1000000.0 if len(self.bwd_timestamps) > 1 else []
-        
-        all_packets = self.fwd_packets + self.bwd_packets
-        flags_str = "".join(self.tcp_flags)
+        bwd_mean = self.bwd_mean
+        bwd_std = math.sqrt(self.bwd_M2 / bwd_cnt) if bwd_cnt > 0 else 0.0
+        bwd_max = self.bwd_max
+        bwd_min = self.bwd_min if bwd_cnt > 0 else 0.0
         
         def get_stats(periods):
             if not periods:
@@ -238,43 +352,43 @@ class NetworkFlow:
             "Bwd Packet Length Std": float(bwd_std),
             "Flow Bytes/s": float(total_sum / duration_sec),
             "Flow Packets/s": float(total_cnt / duration_sec),
-            "Flow IAT Mean": float(np.mean(flow_iats) if len(flow_iats) else 0.0),
-            "Flow IAT Std": float(np.std(flow_iats) if len(flow_iats) else 0.0),
-            "Flow IAT Max": float(max(flow_iats) if len(flow_iats) else 0.0),
-            "Flow IAT Min": float(min(flow_iats) if len(flow_iats) else 0.0),
-            "Fwd IAT Total": float(sum(fwd_iats) if len(fwd_iats) else 0.0),
-            "Fwd IAT Mean": float(np.mean(fwd_iats) if len(fwd_iats) else 0.0),
-            "Fwd IAT Std": float(np.std(fwd_iats) if len(fwd_iats) else 0.0),
-            "Fwd IAT Max": float(max(fwd_iats) if len(fwd_iats) else 0.0),
-            "Fwd IAT Min": float(min(fwd_iats) if len(fwd_iats) else 0.0),
-            "Bwd IAT Total": float(sum(bwd_iats) if len(bwd_iats) else 0.0),
-            "Bwd IAT Mean": float(np.mean(bwd_iats) if len(bwd_iats) else 0.0),
-            "Bwd IAT Std": float(np.std(bwd_iats) if len(bwd_iats) else 0.0),
-            "Bwd IAT Max": float(max(bwd_iats) if len(bwd_iats) else 0.0),
-            "Bwd IAT Min": float(min(bwd_iats) if len(bwd_iats) else 0.0),
-            "Fwd PSH Flags": float(flags_str.count("P")),
+            "Flow IAT Mean": float(self.flow_iat_mean),
+            "Flow IAT Std": float(math.sqrt(self.flow_iat_M2 / self.flow_iat_count) if self.flow_iat_count > 0 else 0.0),
+            "Flow IAT Max": float(self.flow_iat_max),
+            "Flow IAT Min": float(self.flow_iat_min if self.flow_iat_count > 0 else 0.0),
+            "Fwd IAT Total": float((self.last_fwd_timestamp - self.first_fwd_timestamp) * 1000000.0 if fwd_cnt > 1 else 0.0),
+            "Fwd IAT Mean": float(self.fwd_iat_mean),
+            "Fwd IAT Std": float(math.sqrt(self.fwd_iat_M2 / self.fwd_iat_count) if self.fwd_iat_count > 0 else 0.0),
+            "Fwd IAT Max": float(self.fwd_iat_max),
+            "Fwd IAT Min": float(self.fwd_iat_min if self.fwd_iat_count > 0 else 0.0),
+            "Bwd IAT Total": float((self.last_bwd_timestamp - self.first_bwd_timestamp) * 1000000.0 if bwd_cnt > 1 else 0.0),
+            "Bwd IAT Mean": float(self.bwd_iat_mean),
+            "Bwd IAT Std": float(math.sqrt(self.bwd_iat_M2 / self.bwd_iat_count) if self.bwd_iat_count > 0 else 0.0),
+            "Bwd IAT Max": float(self.bwd_iat_max),
+            "Bwd IAT Min": float(self.bwd_iat_min if self.bwd_iat_count > 0 else 0.0),
+            "Fwd PSH Flags": float(self.flag_counts.get("P", 0.0)),
             "Bwd PSH Flags": 0.0,
-            "Fwd URG Flags": float(flags_str.count("U")),
+            "Fwd URG Flags": float(self.flag_counts.get("U", 0.0)),
             "Bwd URG Flags": 0.0,
             "Fwd Header Length": float(self.fwd_header_len),
             "Bwd Header Length": float(self.bwd_header_len),
             "Fwd Packets/s": float(fwd_cnt / duration_sec),
             "Bwd Packets/s": float(bwd_cnt / duration_sec),
-            "Min Packet Length": float(min(all_packets) if all_packets else 0.0),
-            "Max Packet Length": float(max(all_packets) if all_packets else 0.0),
-            "Packet Length Mean": float(np.mean(all_packets) if all_packets else 0.0),
-            "Packet Length Std": float(np.std(all_packets) if all_packets else 0.0),
-            "Packet Length Variance": float(np.var(all_packets) if all_packets else 0.0),
-            "FIN Flag Count": float(flags_str.count("F")),
-            "SYN Flag Count": float(flags_str.count("S")),
-            "RST Flag Count": float(flags_str.count("R")),
-            "PSH Flag Count": float(flags_str.count("P")),
-            "ACK Flag Count": float(flags_str.count("A")),
-            "URG Flag Count": float(flags_str.count("U")),
-            "CWR Flag Count": float(flags_str.count("C")),
-            "ECE Flag Count": float(flags_str.count("E")),
-            "Down/Up Ratio": float(bwd_cnt / fwd_cnt if fwd_cnt else 0.0),
-            "Average Packet Size": float(total_sum / total_cnt if total_cnt else 0.0),
+            "Min Packet Length": float(self.all_min if self.all_count > 0 else 0.0),
+            "Max Packet Length": float(self.all_max),
+            "Packet Length Mean": float(self.all_mean),
+            "Packet Length Std": float(math.sqrt(self.all_M2 / self.all_count) if self.all_count > 0 else 0.0),
+            "Packet Length Variance": float(self.all_M2 / self.all_count if self.all_count > 0 else 0.0),
+            "FIN Flag Count": float(self.flag_counts.get("F", 0.0)),
+            "SYN Flag Count": float(self.flag_counts.get("S", 0.0)),
+            "RST Flag Count": float(self.flag_counts.get("R", 0.0)),
+            "PSH Flag Count": float(self.flag_counts.get("P", 0.0)),
+            "ACK Flag Count": float(self.flag_counts.get("A", 0.0)),
+            "URG Flag Count": float(self.flag_counts.get("U", 0.0)),
+            "CWR Flag Count": float(self.flag_counts.get("C", 0.0)),
+            "ECE Flag Count": float(self.flag_counts.get("E", 0.0)),
+            "Down/Up Ratio": float(bwd_cnt / fwd_cnt if fwd_cnt > 0 else 0.0),
+            "Average Packet Size": float(total_sum / total_cnt if total_cnt > 0 else 0.0),
             "Avg Fwd Segment Size": float(fwd_mean),
             "Avg Bwd Segment Size": float(bwd_mean),
             "Fwd Header Length.1": float(self.fwd_header_len),
@@ -290,7 +404,7 @@ class NetworkFlow:
             "Subflow Bwd Bytes": float(bwd_sum),
             "Init_Win_bytes_forward": float(self.init_win_fwd),
             "Init_Win_bytes_backward": float(self.init_win_bwd),
-            "act_data_pkt_fwd": float(sum(1 for p in self.fwd_packets if p > 0)),
+            "act_data_pkt_fwd": float(self.act_data_pkt_fwd_cnt),
             "min_seg_size_forward": float(self.min_seg_size_fwd),
             "Active Mean": float(act_mean),
             "Active Std": float(act_std),
