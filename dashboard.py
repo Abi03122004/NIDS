@@ -66,7 +66,7 @@ def index():
     is_admin = is_admin_email(user.email)
     
     # Check if sniffer is running (heartbeat check)
-    sniffer_active = live_sniffer.sniffer_instance is not None and live_sniffer.sniffer_instance.running
+    sniffer_active = live_sniffer.is_sniffer_active()
     is_render = "RENDER" in os.environ
     login_time = session.get("login_time")
     
@@ -214,7 +214,7 @@ def api_operators():
 def api_sniffer_status():
     if not get_current_user():
         return jsonify({"error": "Unauthorized"}), 401
-    active = live_sniffer.sniffer_instance is not None and live_sniffer.sniffer_instance.running
+    active = live_sniffer.is_sniffer_active()
     return jsonify({"active": active})
 
 @app.route("/api/settings/config")
@@ -341,7 +341,7 @@ def action_sniffer_toggle():
         return "Unauthorized", 401
         
     # Check if sniffer is running
-    active = live_sniffer.sniffer_instance is not None and live_sniffer.sniffer_instance.running
+    active = live_sniffer.is_sniffer_active()
     if active:
         live_sniffer.stop_sniffer_thread()
         return jsonify({"active": False})

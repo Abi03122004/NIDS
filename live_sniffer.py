@@ -667,6 +667,11 @@ def cleanup_expired_flows_loop():
                 flow = active_flows.pop(key)
                 inference_queue.put(flow)
 
+def is_sniffer_active():
+    """Checks if the raw packet sniffer thread is running and active."""
+    global sniffer_thread
+    return sniffer_thread is not None and sniffer_thread.is_alive()
+
 def start_sniffer_thread(interface=None):
     """Spawns raw L2 sniffer thread, inference consumer, and cleanup loops."""
     global sniffer_thread, worker_thread, cleanup_thread, features_list, stop_sniffer_event
@@ -674,6 +679,10 @@ def start_sniffer_thread(interface=None):
     if os.environ.get("RENDER"):
         print("[*] Skipping sniffer start: disabled inside cloud container sandbox.")
         return False
+        
+    if is_sniffer_active():
+        print("[*] Sniffer is already running, skipping start.")
+        return True
         
     stop_sniffer_event.clear()
     
@@ -706,7 +715,7 @@ def start_sniffer_thread(interface=None):
 
 def stop_sniffer_thread():
     """Gracefully terminates background sniffing threads and closes open sockets."""
-    global sniffer_socket, stop_sniffer_event
+    global sniffer_socket, stop_sniffer_event, sniffer_thread
     print("[*] Stopping AsyncSniffer background threads...")
     stop_sniffer_event.set()
     
@@ -716,6 +725,13 @@ def stop_sniffer_thread():
         except Exception:
             pass
         sniffer_socket = None
+        
+    # Wait for background thread to exit cleanly
+    if sniffer_thread and sniffer_thread.is_alive():
+        try:
+            sniffer_thread.join(timeout=1.0)
+        except Exception:
+            pass
             
     # Clean up heartbeat file
     try:
