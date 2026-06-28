@@ -26,6 +26,9 @@
     </script>
     <!-- Socket.IO Client - served locally to avoid CDN timeout issues -->
     <script src="/static/socket.io.min.js" onerror="console.warn('Local socket.io failed, trying CDN...'); var s=document.createElement('script'); s.src='https://cdn.socket.io/4.7.5/socket.io.min.js'; document.head.appendChild(s);"></script>
+    <!-- HTMX and WebSockets Extension -->
+    <script src="https://unpkg.com/htmx.org@1.9.12"></script>
+    <script src="https://unpkg.com/htmx.org@1.9.12/dist/ext/ws.js"></script>
     <!-- Chart.js CDN -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     
@@ -238,6 +241,19 @@
         :root.light .text-purple-400 {
             color: #7c3aed !important;
         }
+        
+        /* CSS placeholder rule for active incidents container empty state */
+        #incidents-feed-active:empty::after {
+            content: "No active security incidents detected. System healthy.";
+            display: block;
+            padding: 1.5rem;
+            color: var(--text-secondary);
+            font-style: italic;
+            text-align: center;
+            background-color: rgba(20, 21, 34, 0.2);
+            border: 1px dashed var(--border-color);
+            border-radius: 0.5rem;
+        }
     </style>
 </head>
 <body class="text-slate-100 font-sans min-h-screen flex flex-col antialiased">
@@ -430,11 +446,7 @@
                         <h4 class="text-sm font-semibold tracking-wider text-red-400 mb-4 uppercase border-b border-white/5 pb-2.5">
                             🔥 Ongoing Active Incidents (In-Memory)
                         </h4>
-                        <div id="incidents-feed-active" class="flex-1 max-h-[300px] overflow-y-auto flex flex-col gap-3">
-                            <div class="text-slate-400 text-sm italic p-4 bg-slate-900/20 border border-dashed border-white/5 rounded-lg text-center">
-                                No active security incidents detected. System healthy.
-                            </div>
-                        </div>
+                        <div id="incidents-feed-active" hx-ext="ws" ws-connect="/live-alerts" class="flex-1 max-h-[300px] overflow-y-auto flex flex-col gap-3"></div>
                     </div>
                     
                     <!-- Resolved Incidents Feed -->
@@ -749,14 +761,14 @@
                 const lastUpdateMs = Date.parse(data.last_update);
                 if (loginTimeMs && lastUpdateMs < loginTimeMs) return;
                 logConsole(`[ALERT] ACTIVE INCIDENT: Potential ${data.attack_type} attack ongoing from ${data.src_ip}!`);
-                updateActiveIncidentUI(data);
+                // updateActiveIncidentUI(data); // Handled dynamically in real-time by HTMX WebSockets
                 fetchStats();
             });
             
             // Incident resolved/cooled down
             socket.on("incident_resolved", (data) => {
                 logConsole(`[INFO] Incident resolved: ${data.attack_type} attack from ${data.src_ip} finished.`);
-                removeActiveIncidentUI(data.src_ip, data.attack_type);
+                // removeActiveIncidentUI(data.src_ip, data.attack_type); // Handled dynamically in real-time by HTMX WebSockets
                 fetchIncidents();  // Refresh recently resolved feeds
                 fetchStats();
             });

@@ -40,10 +40,113 @@ app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", secrets.token_hex(24))
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading")
 
+from flask_sock import Sock
+import threading
+
+sock = Sock(app)
+active_websockets = []
+websockets_lock = threading.Lock()
+
+@sock.route('/live-alerts')
+def live_alerts(ws):
+    with websockets_lock:
+        active_websockets.append(ws)
+    try:
+        while True:
+            data = ws.receive()
+            if data is None:
+                break
+    except Exception:
+        pass
+    finally:
+        with websockets_lock:
+            if ws in active_websockets:
+                active_websockets.remove(ws)
+
+def broadcast_htmx_alert(incident_data: dict):
+    src_ip = incident_data.get("src_ip", "Unknown")
+    attack_type = incident_data.get("attack_type", "Unknown")
+    event_count = incident_data.get("event_count", 0)
+    
+    def parse_time(ts_str):
+        if not ts_str:
+            return ""
+        try:
+            dt = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+            return dt.strftime("%I:%M:%S %p")
+        except Exception:
+            return str(ts_str)
+            
+    start = parse_time(incident_data.get("start_time"))
+    last = parse_time(incident_data.get("last_update"))
+    card_id = f"active-inc-{src_ip.replace('.', '-')}-{attack_type}"
+    
+    if event_count <= 1:
+        html = f"""
+        <div id="incidents-feed-active" hx-swap-oob="beforeend">
+            <div id="{card_id}" class="p-3.5 bg-red-950/20 border border-red-500/20 rounded-lg flex flex-col gap-1.5 text-xs text-slate-300 leading-relaxed font-mono relative overflow-hidden">
+                <div class="absolute top-0 left-0 w-1.5 h-full bg-red-500"></div>
+                <div class="pl-2">
+                    <div class="flex justify-between items-center">
+                        <span class="text-red-400 font-bold">🔥 Potential {attack_type}</span>
+                        <span class="bg-red-500/10 text-red-400 text-[10px] font-semibold px-2 py-0.5 rounded border border-red-500/20 uppercase tracking-widest font-sans animate-pulse">Ongoing</span>
+                    </div>
+                    <div class="text-slate-300 mt-1">Source IP (Attacker): <span class="text-slate-100 font-semibold">{src_ip}</span></div>
+                    <div class="text-[11px] text-slate-400 mt-0.5">Aggregated Anomalies: <span class="text-red-400 font-bold font-mono">{event_count}</span> events</div>
+                    <div class="text-[11px] text-slate-500 mt-1">First anomaly: {start} | Last active: {last}</div>
+                </div>
+            </div>
+        </div>
+        """
+    else:
+        html = f"""
+        <div id="{card_id}" hx-swap-oob="true" class="p-3.5 bg-red-950/20 border border-red-500/20 rounded-lg flex flex-col gap-1.5 text-xs text-slate-300 leading-relaxed font-mono relative overflow-hidden">
+            <div class="absolute top-0 left-0 w-1.5 h-full bg-red-500"></div>
+            <div class="pl-2">
+                <div class="flex justify-between items-center">
+                    <span class="text-red-400 font-bold">🔥 Potential {attack_type}</span>
+                    <span class="bg-red-500/10 text-red-400 text-[10px] font-semibold px-2 py-0.5 rounded border border-red-500/20 uppercase tracking-widest font-sans animate-pulse">Ongoing</span>
+                </div>
+                <div class="text-slate-300 mt-1">Source IP (Attacker): <span class="text-slate-100 font-semibold">{src_ip}</span></div>
+                <div class="text-[11px] text-slate-400 mt-0.5">Aggregated Anomalies: <span class="text-red-400 font-bold font-mono">{event_count}</span> events</div>
+                <div class="text-[11px] text-slate-500 mt-1">First anomaly: {start} | Last active: {last}</div>
+            </div>
+        </div>
+        """
+        
+    with websockets_lock:
+        for ws in list(active_websockets):
+            try:
+                ws.send(html)
+            except Exception:
+                pass
+
+def broadcast_htmx_resolved(incident_data: dict):
+    src_ip = incident_data.get("src_ip", "Unknown")
+    attack_type = incident_data.get("attack_type", "Unknown")
+    card_id = f"active-inc-{src_ip.replace('.', '-')}-{attack_type}"
+    
+    html = f'<div id="{card_id}" hx-swap-oob="delete"></div>'
+    
+    with websockets_lock:
+        for ws in list(active_websockets):
+            try:
+                ws.send(html)
+            except Exception:
+                pass
+
+def handle_new_incident(msg):
+    socketio.emit("new_incident", msg)
+    broadcast_htmx_alert(msg)
+
+def handle_incident_resolved(msg):
+    socketio.emit("incident_resolved", msg)
+    broadcast_htmx_resolved(msg)
+
 # Start background subscriber workers to forward messages from broker to SocketIO
 broker.start_subscriber("new_flow", lambda msg: socketio.emit("new_flow", msg))
-broker.start_subscriber("new_incident", lambda msg: socketio.emit("new_incident", msg))
-broker.start_subscriber("incident_resolved", lambda msg: socketio.emit("incident_resolved", msg))
+broker.start_subscriber("new_incident", handle_new_incident)
+broker.start_subscriber("incident_resolved", handle_incident_resolved)
 
 # Helper functions
 def get_current_user():
