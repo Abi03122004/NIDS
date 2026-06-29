@@ -771,7 +771,7 @@ def sniffer_loop(iface):
     """Raw Libpcap sniffing thread utilizing kernel BPF filters and non-blocking polling."""
     global stop_sniffer_event
     
-    bpf_filter = "ip and (tcp or udp) and not (port 1900 or port 5353 or port 137 or port 138 or port 139 or port 123)"
+    bpf_filter = "ip and (tcp or udp) and not (port 1900 or port 5353 or port 137 or port 138 or port 139 or port 123 or port 8501)"
     print(f"[*] Initializing raw libpcap L2 socket on {iface} with BPF: {bpf_filter}")
     
     try:

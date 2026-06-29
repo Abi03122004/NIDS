@@ -1,3 +1,5 @@
+import eventlet
+eventlet.monkey_patch()
 import os
 import sys
 import time
@@ -17,6 +19,7 @@ from notification_engine import load_config, save_config, send_telegram_message,
 import live_sniffer
 import incident_manager
 from message_broker import broker
+from web.chatbot import chatbot_engine
 
 # Auto-initialize database if users table is missing
 def check_db_initialized():
@@ -38,7 +41,7 @@ check_db_initialized()
 # Initialize Flask and SocketIO
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", secrets.token_hex(24))
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading")
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode="eventlet")
 
 from flask_sock import Sock
 import threading
@@ -135,16 +138,20 @@ def broadcast_htmx_resolved(incident_data: dict):
             except Exception:
                 pass
 
+def thread_safe_emit(event, data, namespace='/'):
+    """Explicit template for background threads to safely push data across the Eventlet socket layer."""
+    socketio.emit(event, data, namespace=namespace)
+
 def handle_new_incident(msg):
-    socketio.emit("new_incident", msg)
+    thread_safe_emit("new_incident", msg)
     broadcast_htmx_alert(msg)
 
 def handle_incident_resolved(msg):
-    socketio.emit("incident_resolved", msg)
+    thread_safe_emit("incident_resolved", msg)
     broadcast_htmx_resolved(msg)
 
 # Start background subscriber workers to forward messages from broker to SocketIO
-broker.start_subscriber("new_flow", lambda msg: socketio.emit("new_flow", msg))
+broker.start_subscriber("new_flow", lambda msg: thread_safe_emit("new_flow", msg))
 broker.start_subscriber("new_incident", handle_new_incident)
 broker.start_subscriber("incident_resolved", handle_incident_resolved)
 
@@ -302,6 +309,21 @@ def api_incidents():
         "active": active,
         "resolved": resolved
     })
+
+@app.route("/api/chatbot", methods=["POST"])
+def api_chatbot():
+    user = get_current_user()
+    if not user:
+        return jsonify({"error": "Unauthorized"}), 401
+    
+    data = request.get_json()
+    message = data.get("message")
+    if not message:
+        return jsonify({"error": "Message is required"}), 400
+        
+    session_id = request.remote_addr
+    response_text = chatbot_engine.ask(session_id, message)
+    return jsonify({"response": response_text})
 
 @app.route("/api/operators")
 def api_operators():
