@@ -257,8 +257,8 @@
     </style>
 </head>
 <body class="text-slate-100 font-sans min-h-screen flex flex-col antialiased">
-
-    <!-- Top Navigation Bar -->
+    <div id="main-layout-wrapper" class="flex-1 flex flex-col min-h-screen transition-all duration-300">
+        <!-- Top Navigation Bar -->
     <header class="glass-panel sticky top-0 z-40 border-b border-white/5 py-4 px-6 flex items-center justify-between">
         <div class="flex items-center gap-3">
             <span class="text-2xl">🛡️</span>
@@ -647,6 +647,7 @@
         <span>KryptaFlow NIDS SOCConsole</span>
         <span class="text-slate-500">Database Engine: SQLite (WAL)</span>
     </footer>
+    </div>
 
     <!-- Web Console JS Scripts -->
     <script>
@@ -1557,15 +1558,22 @@
         // -------------------------------------------------------------
         function toggleChatbot() {
             const win = document.getElementById('chatbot-window');
+            const wrapper = document.getElementById('main-layout-wrapper');
             if (!win) return;
             const isOpen = win.classList.contains('translate-x-0');
             if (isOpen) {
                 win.classList.remove('translate-x-0');
                 win.classList.add('translate-x-full');
+                if (wrapper) {
+                    wrapper.classList.remove('sm:pr-[400px]', 'md:pr-[460px]');
+                }
             } else {
                 win.classList.remove('translate-x-full');
                 win.classList.add('translate-x-0');
                 document.getElementById('chatbot-input').focus();
+                if (wrapper) {
+                    wrapper.classList.add('sm:pr-[400px]', 'md:pr-[460px]');
+                }
             }
         }
 
