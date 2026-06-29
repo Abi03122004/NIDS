@@ -4,6 +4,7 @@ import json
 import time
 import sqlite3
 import hashlib
+import eventlet.tpool
 from groq import Groq
 from database import DB_PATH
 
@@ -94,7 +95,7 @@ class NIDSChatbot:
     MODEL = "llama-3.3-70b-versatile"   # Best free model: smart + tool calling
 
     def __init__(self):
-        self.client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
+        self.client = Groq(api_key=GROQ_API_KEY, timeout=15.0) if GROQ_API_KEY else None
         # Each session holds its own message history for multi-turn conversation
         self.sessions: dict[str, list] = {}
 
@@ -124,13 +125,14 @@ class NIDSChatbot:
 
         try:
             # ── First call: let the LLM decide if it needs to run SQL ────────
-            response = self.client.chat.completions.create(
+            response = eventlet.tpool.execute(
+                self.client.chat.completions.create,
                 model=self.MODEL,
                 messages=self.sessions[session_id],
                 tools=[SQL_TOOL],
                 tool_choice="auto",
                 max_tokens=1024,
-                temperature=0.3,
+                temperature=0.3
             )
 
             msg = response.choices[0].message
@@ -164,11 +166,12 @@ class NIDSChatbot:
                     })
 
                 # ── Second call: synthesize the SQL results into a final answer
-                final_response = self.client.chat.completions.create(
+                final_response = eventlet.tpool.execute(
+                    self.client.chat.completions.create,
                     model=self.MODEL,
                     messages=self.sessions[session_id],
                     max_tokens=1024,
-                    temperature=0.3,
+                    temperature=0.3
                 )
                 result = final_response.choices[0].message.content
             else:
