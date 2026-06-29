@@ -1,9 +1,11 @@
 services:
   - type: web
-    name: network-ids-portal
+    name: kryptaflow-nids
     runtime: python
     buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn -w 1 --threads 100 -b 0.0.0.0:$PORT dashboard:app
+    startCommand: gunicorn --worker-class eventlet -w 1 -b 0.0.0.0:$PORT dashboard:app
     envVars:
       - key: SECRET_KEY
         generateValue: true
+      - key: GEMINI_API_KEY
+        sync: false

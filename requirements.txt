@@ -1,19 +1,27 @@
+Flask
+Flask-SocketIO
+Flask-Login
+Werkzeug
+eventlet
+gunicorn
+
+# Machine Learning
 scikit-learn
 joblib
 numpy
 pandas
-requests
-scapy
-streamlit
-plotly
-Werkzeug
-Flask-SocketIO
-eventlet
-gunicorn
 onnxruntime
 skl2onnx
+
+# AI / Chatbot
+google-generativeai
+
+# Networking (local only - disabled on cloud)
+# scapy         # requires raw sockets - not available on Render
+# npcap         # windows only
+
+# Data / Utilities
+requests
 redis
-ollama
 flask-sock
-
-
+plotly
