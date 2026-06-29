@@ -61,12 +61,16 @@ features_list = None
 # Track distinct destination ports per Source IP for heuristic PortScan signature detection
 port_scan_history = defaultdict(list)
 port_scan_lock = threading.Lock()
+# Cooldown: track when each IP last fired a PortScan alert (suppress repeated alerts)
+port_scan_alerted = {}   # src_ip -> timestamp of last alert
+PORTSCAN_COOLDOWN = 60   # seconds before same IP can trigger another alert
 
 def update_port_scan_heuristic(src_ip, dst_port):
     now = time.time()
     with port_scan_lock:
         port_scan_history[src_ip].append((now, dst_port))
-        port_scan_history[src_ip] = [(t, p) for (t, p) in port_scan_history[src_ip] if now - t <= 10.0]
+        # Only keep entries within the last 5 seconds
+        port_scan_history[src_ip] = [(t, p) for (t, p) in port_scan_history[src_ip] if now - t <= 5.0]
         distinct_ports = len(set(p for (t, p) in port_scan_history[src_ip]))
         return distinct_ports
 
@@ -688,16 +692,21 @@ def process_raw_packet(cls, pkt_bytes: bytes, ts: float):
             # If it's a new flow, track unique ports to check for heuristic port scanning
             if is_new:
                 distinct_ports = update_port_scan_heuristic(src_ip, dst_port)
-                if distinct_ports >= 100:
-                    flow.matched_signature = {
-                        "id": "SIG-HEURISTIC-PORTSCAN",
-                        "name": "Heuristic Port Scan Detected",
-                        "type": "port",
-                        "protocol": "TCP" if proto == 6 else "UDP",
-                        "severity": "HIGH",
-                        "attack_type": "PortScan",
-                        "description": f"Source IP scanned {distinct_ports} unique ports within 10 seconds."
-                    }
+                if distinct_ports >= 200:   # 200 ports/5s = real scan, not torrent/browsing
+                    now = time.time()
+                    # Only alert once per IP per cooldown window (suppress alert spam)
+                    last_alert = port_scan_alerted.get(src_ip, 0)
+                    if now - last_alert > PORTSCAN_COOLDOWN:
+                        port_scan_alerted[src_ip] = now
+                        flow.matched_signature = {
+                            "id": "SIG-HEURISTIC-PORTSCAN",
+                            "name": "Heuristic Port Scan Detected",
+                            "type": "port",
+                            "protocol": "TCP" if proto == 6 else "UDP",
+                            "severity": "HIGH",
+                            "attack_type": "PortScan",
+                            "description": f"Source IP scanned {distinct_ports} unique ports within 5 seconds."
+                        }
             flow.add_packet_fast(
                 pkt_len=len(pkt_bytes),
                 ip_header_len=ip_header_len,
