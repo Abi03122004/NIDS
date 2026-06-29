@@ -688,7 +688,7 @@ def process_raw_packet(cls, pkt_bytes: bytes, ts: float):
             # If it's a new flow, track unique ports to check for heuristic port scanning
             if is_new:
                 distinct_ports = update_port_scan_heuristic(src_ip, dst_port)
-                if distinct_ports >= 15:
+                if distinct_ports >= 100:
                     flow.matched_signature = {
                         "id": "SIG-HEURISTIC-PORTSCAN",
                         "name": "Heuristic Port Scan Detected",

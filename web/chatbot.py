@@ -84,11 +84,15 @@ If the user asks a general networking or system architecture question, use your 
 Keep your responses concise, professional, and formatted in Markdown.
 """
 
-    # gemini-2.0-flash — confirmed available, 1500 free req/day (vs 25/day for 2.5-flash)
+    # gemini-2.0-flash-lite — fastest model, lowest latency, 1500 free req/day
     model = genai.GenerativeModel(
-        model_name="gemini-2.0-flash",
+        model_name="gemini-2.0-flash-lite",
         system_instruction=SYSTEM_INSTRUCTION,
-        tools=[execute_sql]
+        tools=[execute_sql],
+        generation_config=genai.types.GenerationConfig(
+            max_output_tokens=512,   # Keep responses concise & fast
+            temperature=0.2,         # Low temp = faster, more deterministic SQL
+        )
     )
 else:
     model = None
