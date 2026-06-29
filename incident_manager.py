@@ -11,6 +11,7 @@ from typing import Dict, Any, List, Optional
 from database import get_connection
 from notification_engine import dispatch_alert
 from message_broker import broker
+import firewall_engine
 
 # Incident aggregation thresholds
 ANOMALY_THRESHOLD = 5  # Number of related anomalies to trigger an urgent notification
@@ -82,6 +83,14 @@ def process_anomaly(
                     severity=severity,
                     count=max(recent_count, inc["event_count"])
                 )
+                # ── AI Prevention: attempt auto-block on confirmed threat ──
+                fw_result = firewall_engine.process_threat(
+                    src_ip=src_ip,
+                    attack_type=attack_type,
+                    confidence=inc.get("confidence", 100.0),
+                    dst_ip=dst_ip
+                )
+                inc["firewall_action"] = fw_result.get("action", "MONITORED")
             elif inc["notified"] == 1 and inc["event_count"] % 50 == 0:
                 # Follow up warning for heavy floods
                 trigger_incident_notification(

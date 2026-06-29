@@ -3,151 +3,193 @@ import re
 import json
 import time
 import sqlite3
-from typing import Tuple, List, Any
-import google.generativeai as genai
+import hashlib
+from groq import Groq
 from database import DB_PATH
 
-# Configure Gemini API
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+# ─── Configuration ──────────────────────────────────────────────────────────
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
 
+# Simple in-memory cache — avoids burning quota on repeated questions
+_response_cache = {}
+CACHE_TTL_SECONDS = 300  # Cache responses for 5 minutes
+
+# System prompt injected into every session
+SYSTEM_PROMPT = """You are KryptaFlow AI, an expert Network Security Architect and NIDS assistant.
+You help analysts understand their network intrusion detection system and query historical threat data.
+
+Database Schema (SQLite — ids_predictions.db):
+Table `predictions`:
+  - id (INTEGER PK), timestamp (TEXT ISO8601), prediction (TEXT: BENIGN/DoS/DDoS/PortScan)
+  - confidence (REAL), severity (TEXT: LOW/MEDIUM/HIGH/CRITICAL)
+  - src_ip (TEXT), dst_ip (TEXT), src_port (INTEGER), dst_port (INTEGER)
+  - protocol (INTEGER), detection_method (TEXT: SIGNATURE or BEHAVIOR)
+
+Table `incidents`:
+  - id (INTEGER PK), start_time (TEXT), last_update (TEXT)
+  - src_ip (TEXT), dst_ip (TEXT), attack_type (TEXT)
+  - event_count (INTEGER), severity (TEXT), status (TEXT), notified (INTEGER)
+
+Rules:
+- When user asks about data/stats/logs, call the execute_sql tool with a valid SQLite SELECT query.
+- ONLY use SELECT. Never use INSERT, UPDATE, DELETE, or DROP.
+- Keep answers concise, professional, formatted in Markdown.
+- For general network security questions, answer from your own knowledge.
+"""
+
+# Tool definition for Groq function calling
+SQL_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "execute_sql",
+        "description": "Executes a read-only SELECT query on the local KryptaFlow SQLite database (ids_predictions.db) and returns the results as JSON. Use this to answer any question about historical network logs, threats, incidents, or statistics.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "A valid SQLite SELECT statement to run against the database."
+                }
+            },
+            "required": ["query"]
+        }
+    }
+}
+
+# ─── SQL Executor ────────────────────────────────────────────────────────────
 def execute_sql(query: str) -> str:
-    """Executes a read-only SQLite query and returns the results."""
-    cleaned_query = query.strip().rstrip(";").strip()
-    if not re.match(r"^\s*select\b", cleaned_query, re.IGNORECASE):
-        return "Error: Unauthorized query modification. Only SELECT queries are permitted."
-        
+    """Executes a read-only SQLite query and returns results as JSON string."""
+    cleaned = query.strip().rstrip(";").strip()
+    if not re.match(r"^\s*select\b", cleaned, re.IGNORECASE):
+        return json.dumps({"error": "Only SELECT queries are permitted."})
     try:
         abs_path = os.path.abspath(DB_PATH)
         uri_path = abs_path.replace("\\", "/")
         db_uri = f"file:{uri_path}?mode=ro"
-        
+
         conn = sqlite3.connect(db_uri, uri=True, timeout=5.0)
         conn.execute("PRAGMA query_only = ON;")
-        
         cursor = conn.cursor()
-        
-        # Avoid appending LIMIT if the query already has one
-        if not re.search(r'\blimit\s+\d+', cleaned_query, re.IGNORECASE):
-            cleaned_query += " LIMIT 15"
-            
-        cursor.execute(cleaned_query + ";")
+
+        if not re.search(r'\blimit\s+\d+', cleaned, re.IGNORECASE):
+            cleaned += " LIMIT 20"
+
+        cursor.execute(cleaned + ";")
         rows = cursor.fetchall()
-        columns = [description[0] for description in cursor.description] if cursor.description else []
+        columns = [d[0] for d in cursor.description] if cursor.description else []
         conn.close()
-        
+
         if not rows:
-            return "No results found."
-            
-        result = [dict(zip(columns, row)) for row in rows]
-        return json.dumps(result, indent=2)
+            return json.dumps({"result": "No records found."})
+
+        return json.dumps([dict(zip(columns, row)) for row in rows], indent=2)
     except Exception as e:
-        return f"SQL Error: {str(e)}"
+        return json.dumps({"error": str(e)})
 
-if GEMINI_API_KEY:
-    genai.configure(api_key=GEMINI_API_KEY)
-    
-    SYSTEM_INSTRUCTION = """You are KryptaFlow AI, an expert Network Security Architect and NIDS Chatbot.
-You are tasked with answering user questions about the network intrusion detection system and executing SQL queries against the local database to find insights.
 
-Database Information:
-Database Path: ids_predictions.db (SQLite)
-Schema:
-1. Table `predictions`
-   - id (INTEGER, PRIMARY KEY)
-   - timestamp (TEXT, ISO8601)
-   - prediction (TEXT) - e.g., 'BENIGN', 'DoS', 'DDoS', 'PortScan'
-   - confidence (REAL)
-   - severity (TEXT) - 'LOW', 'MEDIUM', 'HIGH', 'CRITICAL'
-   - src_ip (TEXT)
-   - dst_ip (TEXT)
-   - src_port (INTEGER)
-   - dst_port (INTEGER)
-   - protocol (INTEGER)
-   - detection_method (TEXT) - 'SIGNATURE' or 'BEHAVIOR'
-   
-2. Table `incidents`
-   - id (INTEGER PRIMARY KEY)
-   - start_time (TEXT)
-   - last_update (TEXT)
-   - src_ip (TEXT)
-   - dst_ip (TEXT)
-   - attack_type (TEXT)
-   - event_count (INTEGER)
-   - severity (TEXT)
-   - status (TEXT)
-   - notified (INTEGER)
-
-If the user asks a question about historical data, use the `execute_sql` tool to run a READ-ONLY query.
-Always ensure your SQL is valid SQLite. ONLY use SELECT statements. DO NOT use INSERT, UPDATE, or DELETE.
-
-If the user asks a general networking or system architecture question, use your general knowledge to assist them.
-Keep your responses concise, professional, and formatted in Markdown.
-"""
-
-    # gemini-2.0-flash-lite — fastest model, lowest latency, 1500 free req/day
-    model = genai.GenerativeModel(
-        model_name="gemini-2.0-flash-lite",
-        system_instruction=SYSTEM_INSTRUCTION,
-        tools=[execute_sql],
-        generation_config=genai.types.GenerationConfig(
-            max_output_tokens=512,   # Keep responses concise & fast
-            temperature=0.2,         # Low temp = faster, more deterministic SQL
-        )
-    )
-else:
-    model = None
-
+# ─── Chatbot Class ───────────────────────────────────────────────────────────
 class NIDSChatbot:
-    """Orchestrates Text-to-SQL generation and RAG synthesis via Gemini."""
-    
+    """RAG + LLM chatbot using Groq's Llama 3.3 with Text-to-SQL tool calling."""
+
+    MODEL = "llama-3.3-70b-versatile"   # Best free model: smart + tool calling
+
     def __init__(self):
-        self.chat_sessions = {}
-        
+        self.client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
+        # Each session holds its own message history for multi-turn conversation
+        self.sessions: dict[str, list] = {}
+
     def ask(self, session_id: str, question: str) -> str:
-        """Processes a user message through Gemini with Text-to-SQL capabilities."""
-        if not GEMINI_API_KEY or not model:
-            return "⚠️ Error: GEMINI_API_KEY environment variable is not set. Please set the GEMINI_API_KEY in your environment before starting the server."
-            
-        # Retry up to 2 times on quota/rate-limit errors
-        for attempt in range(3):
-            try:
-                # Initialize or retrieve chat session
-                if session_id not in self.chat_sessions:
-                    self.chat_sessions[session_id] = model.start_chat(
-                        enable_automatic_function_calling=True
-                    )
-                    
-                chat = self.chat_sessions[session_id]
-                response = chat.send_message(question)
-                return response.text
+        if not self.client:
+            return (
+                "⚠️ **GROQ_API_KEY not set.**\n"
+                "Get a free key at https://console.groq.com → API Keys\n"
+                "Then set it as an environment variable: `GROQ_API_KEY=your_key`"
+            )
 
-            except Exception as e:
-                err = str(e)
+        # Check cache to save quota on repeated questions
+        cache_key = hashlib.md5(question.strip().lower().encode()).hexdigest()
+        if cache_key in _response_cache:
+            cached_at, cached_response = _response_cache[cache_key]
+            if time.time() - cached_at < CACHE_TTL_SECONDS:
+                return f"{cached_response}\n\n*⚡ Cached response*"
 
-                # Rate limit / quota exceeded — friendly message
-                if "429" in err or "quota" in err.lower() or "rate" in err.lower():
-                    if attempt < 2:
-                        wait = 15 * (attempt + 1)   # 15s, then 30s
-                        time.sleep(wait)
-                        continue
-                    return (
-                        "⚠️ **Gemini API quota reached.** The free tier allows a limited number of "
-                        "requests per day.\n\n"
-                        "**Options:**\n"
-                        "- Wait a few minutes and try again.\n"
-                        "- Upgrade your Google AI Studio plan at https://ai.dev/rate-limit\n"
-                        "- The rest of the dashboard (live alerts, charts) works perfectly without the AI."
-                    )
+        # Initialize session history if new
+        if session_id not in self.sessions:
+            self.sessions[session_id] = [
+                {"role": "system", "content": SYSTEM_PROMPT}
+            ]
 
-                # Model not found — give a clear hint
-                if "404" in err:
-                    return (
-                        "⚠️ **Gemini model not found.** Run `list_models.py` in your project "
-                        "directory to see the models your API key supports, then update "
-                        "`web/chatbot.py` line 83."
-                    )
+        # Append user message
+        self.sessions[session_id].append({"role": "user", "content": question})
 
-                return f"⚠️ Error communicating with Gemini AI: {err}"
+        try:
+            # ── First call: let the LLM decide if it needs to run SQL ────────
+            response = self.client.chat.completions.create(
+                model=self.MODEL,
+                messages=self.sessions[session_id],
+                tools=[SQL_TOOL],
+                tool_choice="auto",
+                max_tokens=1024,
+                temperature=0.3,
+            )
+
+            msg = response.choices[0].message
+
+            # ── If the LLM called execute_sql, run it and feed result back ───
+            if msg.tool_calls:
+                # Add assistant's tool call to history
+                self.sessions[session_id].append({
+                    "role": "assistant",
+                    "content": msg.content or "",
+                    "tool_calls": [
+                        {
+                            "id": tc.id,
+                            "type": "function",
+                            "function": {
+                                "name": tc.function.name,
+                                "arguments": tc.function.arguments
+                            }
+                        } for tc in msg.tool_calls
+                    ]
+                })
+
+                # Execute each tool call
+                for tool_call in msg.tool_calls:
+                    args = json.loads(tool_call.function.arguments)
+                    sql_result = execute_sql(args.get("query", ""))
+                    self.sessions[session_id].append({
+                        "role": "tool",
+                        "tool_call_id": tool_call.id,
+                        "content": sql_result
+                    })
+
+                # ── Second call: synthesize the SQL results into a final answer
+                final_response = self.client.chat.completions.create(
+                    model=self.MODEL,
+                    messages=self.sessions[session_id],
+                    max_tokens=1024,
+                    temperature=0.3,
+                )
+                result = final_response.choices[0].message.content
+            else:
+                result = msg.content
+
+            # Add assistant's final answer to history
+            self.sessions[session_id].append({"role": "assistant", "content": result})
+
+            # Cache the result
+            _response_cache[cache_key] = (time.time(), result)
+            return result
+
+        except Exception as e:
+            err = str(e)
+            if "429" in err or "rate" in err.lower():
+                return (
+                    "⚠️ **Groq rate limit hit.** Wait a moment and try again.\n"
+                    "Groq free tier allows 14,400 requests/day — this is likely a per-minute limit."
+                )
+            return f"⚠️ Error: {err}"
+
 
 # Singleton instance
 chatbot_engine = NIDSChatbot()

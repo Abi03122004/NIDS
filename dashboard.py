@@ -20,6 +20,7 @@ import live_sniffer
 import incident_manager
 from message_broker import broker
 from web.chatbot import chatbot_engine
+import firewall_engine
 
 # Auto-initialize database if users table is missing
 def check_db_initialized():
@@ -324,6 +325,38 @@ def api_chatbot():
     session_id = request.remote_addr
     response_text = chatbot_engine.ask(session_id, message)
     return jsonify({"response": response_text})
+
+# ── Prevention API ─────────────────────────────────────────────────────────
+@app.route("/api/firewall/blocked")
+def api_blocked_ips():
+    user = get_current_user()
+    if not user:
+        return jsonify({"error": "Unauthorized"}), 401
+    return jsonify(firewall_engine.get_blocked_ips())
+
+@app.route("/api/firewall/block", methods=["POST"])
+def api_block_ip():
+    user = get_current_user()
+    if not user:
+        return jsonify({"error": "Unauthorized"}), 401
+    data = request.get_json()
+    ip = data.get("ip", "").strip()
+    if not ip:
+        return jsonify({"error": "IP is required"}), 400
+    success = firewall_engine.block_ip(ip, attack_type="ManualBlock", confidence=100.0, reason=f"Manually blocked by {user.get('username','admin')}")
+    return jsonify({"success": success, "ip": ip})
+
+@app.route("/api/firewall/unblock", methods=["POST"])
+def api_unblock_ip():
+    user = get_current_user()
+    if not user:
+        return jsonify({"error": "Unauthorized"}), 401
+    data = request.get_json()
+    ip = data.get("ip", "").strip()
+    if not ip:
+        return jsonify({"error": "IP is required"}), 400
+    success = firewall_engine.unblock_ip(ip, reason=f"Manually unblocked by {user.get('username','admin')}")
+    return jsonify({"success": success, "ip": ip})
 
 @app.route("/api/operators")
 def api_operators():

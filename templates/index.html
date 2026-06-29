@@ -462,6 +462,53 @@
                     </div>
                 </div>
 
+                <!-- 🛡️ PREVENTION PANEL — Blocked IPs -->
+                <div class="glass-panel p-5 rounded-lg" id="prevention-panel">
+                    <div class="flex items-center justify-between mb-4 border-b border-white/5 pb-2.5">
+                        <div class="flex items-center gap-3">
+                            <span class="text-lg">🛡️</span>
+                            <h4 class="text-sm font-semibold tracking-wider text-orange-400 uppercase">AI Prevention Engine — Blocked IPs</h4>
+                            <span id="blocked-count-badge" class="bg-orange-500/20 text-orange-400 text-xs font-bold px-2 py-0.5 rounded-full border border-orange-500/30">0 Blocked</span>
+                        </div>
+                        <div class="flex items-center gap-2">
+                            <!-- Manual Block Input -->
+                            <input type="text" id="manual-block-input" placeholder="Enter IP to block..."
+                                class="bg-slate-950 border border-white/10 rounded px-3 py-1.5 text-xs text-slate-300 focus:outline-none focus:border-orange-500 w-44"/>
+                            <button onclick="manualBlockIP()" class="bg-orange-500 hover:bg-orange-600 text-white text-xs font-bold px-3 py-1.5 rounded transition flex items-center gap-1">
+                                🚫 Block IP
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Blocked IPs Table -->
+                    <div class="overflow-x-auto max-h-[280px] overflow-y-auto border border-white/5 rounded-lg">
+                        <table class="w-full border-collapse text-left font-mono text-xs">
+                            <thead>
+                                <tr class="bg-slate-950/80 border-b border-white/5 text-slate-400 sticky top-0">
+                                    <th class="p-3">Blocked IP</th>
+                                    <th class="p-3">Attack Type</th>
+                                    <th class="p-3">Confidence</th>
+                                    <th class="p-3">Blocked At</th>
+                                    <th class="p-3">Auto-Unblock</th>
+                                    <th class="p-3">Reason</th>
+                                    <th class="p-3">Action</th>
+                                </tr>
+                            </thead>
+                            <tbody id="blocked-ips-table" class="divide-y divide-white/5 bg-slate-900/10">
+                                <tr id="no-blocks-row">
+                                    <td colspan="7" class="p-6 text-center text-slate-500 italic">
+                                        ✅ No IPs currently blocked — system is monitoring
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <p class="text-slate-600 text-[10px] mt-2">
+                        Auto-block triggers when ML confidence ≥ 85% and ≥ 5 confirmed events. Blocks auto-expire after 1 hour.
+                    </p>
+                </div>
+
                 <!-- Traffic Log Table -->
                 <div class="glass-panel p-5 rounded-lg flex flex-col">
                     <h4 class="text-sm font-semibold tracking-wider text-slate-300 mb-4 uppercase">Live Ingestion Feed (Last 50 Logs)</h4>
@@ -501,31 +548,31 @@
                                 <h4 class="text-xs font-bold text-blue-400 uppercase tracking-widest mb-3">✉️ SMTP Email Dispatcher</h4>
                                 <div class="grid grid-cols-3 gap-3 mb-3">
                                     <div class="col-span-2">
-                                        <label class="text-[10px] text-slate-400 uppercase font-semibold">SMTP Host</label>
+                                        <label for="settings-smtp-host" class="text-[10px] text-slate-400 uppercase font-semibold">SMTP Host</label>
                                         <input type="text" name="smtp_host" id="settings-smtp-host" class="w-full bg-slate-950 border border-white/10 rounded px-3 py-1.5 text-sm focus:outline-none focus:border-blue-500" placeholder="smtp.gmail.com">
                                     </div>
                                     <div>
-                                        <label class="text-[10px] text-slate-400 uppercase font-semibold">Port</label>
+                                        <label for="settings-smtp-port" class="text-[10px] text-slate-400 uppercase font-semibold">Port</label>
                                         <input type="number" name="smtp_port" id="settings-smtp-port" class="w-full bg-slate-950 border border-white/10 rounded px-3 py-1.5 text-sm focus:outline-none focus:border-blue-500" placeholder="587">
                                     </div>
                                 </div>
                                 <div class="grid grid-cols-2 gap-3 mb-3">
                                     <div>
-                                        <label class="text-[10px] text-slate-400 uppercase font-semibold">Sender Email</label>
+                                        <label for="settings-sender-email" class="text-[10px] text-slate-400 uppercase font-semibold">Sender Email</label>
                                         <input type="email" name="sender_email" id="settings-sender-email" class="w-full bg-slate-950 border border-white/10 rounded px-3 py-1.5 text-sm focus:outline-none focus:border-blue-500" placeholder="sender@gmail.com">
                                     </div>
                                     <div>
-                                        <label class="text-[10px] text-slate-400 uppercase font-semibold">Sender Password</label>
+                                        <label for="settings-sender-password" class="text-[10px] text-slate-400 uppercase font-semibold">Sender Password</label>
                                         <input type="password" name="sender_password" id="settings-sender-password" class="w-full bg-slate-950 border border-white/10 rounded px-3 py-1.5 text-sm focus:outline-none focus:border-blue-500" placeholder="App Password">
                                     </div>
                                 </div>
                                 <div class="mb-3">
-                                    <label class="text-[10px] text-slate-400 uppercase font-semibold">Recipient Email</label>
+                                    <label for="settings-recipient-email" class="text-[10px] text-slate-400 uppercase font-semibold">Recipient Email</label>
                                     <input type="email" name="recipient_email" id="settings-recipient-email" class="w-full bg-slate-950 border border-white/10 rounded px-3 py-1.5 text-sm focus:outline-none focus:border-blue-500" placeholder="recipient@security.local">
                                 </div>
                                 <div class="flex items-center gap-2 mt-2">
                                     <input type="checkbox" name="email_enabled" id="settings-email-enabled" class="h-4 w-4 bg-slate-950 border border-white/10 rounded text-blue-500 focus:outline-none">
-                                    <label class="text-xs text-slate-300 select-none">Enable Email Notifications</label>
+                                    <label for="settings-email-enabled" class="text-xs text-slate-300 select-none">Enable Email Notifications</label>
                                 </div>
                             </div>
                             
@@ -535,16 +582,16 @@
                             <div>
                                 <h4 class="text-xs font-bold text-blue-400 uppercase tracking-widest mb-3">💬 Telegram Bot Dispatcher</h4>
                                 <div class="mb-3">
-                                    <label class="text-[10px] text-slate-400 uppercase font-semibold">Bot Token ID</label>
+                                    <label for="settings-tg-token" class="text-[10px] text-slate-400 uppercase font-semibold">Bot Token ID</label>
                                     <input type="password" name="tg_token" id="settings-tg-token" class="w-full bg-slate-950 border border-white/10 rounded px-3 py-1.5 text-sm focus:outline-none focus:border-blue-500" placeholder="123456:ABC-def...">
                                 </div>
                                 <div class="mb-3">
-                                    <label class="text-[10px] text-slate-400 uppercase font-semibold">Channel/Chat Target ID</label>
+                                    <label for="settings-tg-chat-id" class="text-[10px] text-slate-400 uppercase font-semibold">Channel/Chat Target ID</label>
                                     <input type="text" name="tg_chat_id" id="settings-tg-chat-id" class="w-full bg-slate-950 border border-white/10 rounded px-3 py-1.5 text-sm focus:outline-none focus:border-blue-500" placeholder="-10012345678">
                                 </div>
                                 <div class="flex items-center gap-2 mt-2">
                                     <input type="checkbox" name="tg_enabled" id="settings-tg-enabled" class="h-4 w-4 bg-slate-950 border border-white/10 rounded text-blue-500 focus:outline-none">
-                                    <label class="text-xs text-slate-300 select-none">Enable Telegram Notifications</label>
+                                    <label for="settings-tg-enabled" class="text-xs text-slate-300 select-none">Enable Telegram Notifications</label>
                                 </div>
                             </div>
                             
@@ -1384,6 +1431,7 @@
                 fetchStats();
                 fetchHistory();
                 fetchIncidents();
+                fetchBlockedIPs();
             }, 5000);
 
             // WebSocket init is optional — if socket.io fails to load, polling above still works
@@ -1398,6 +1446,112 @@
                 logConsole('[WARN] WebSocket init failed. Falling back to REST polling only.');
             }
         });
+        // -------------------------------------------------------------
+        // Prevention / Firewall Functions
+        // -------------------------------------------------------------
+        function fetchBlockedIPs() {
+            fetch('/api/firewall/blocked')
+                .then(r => r.json())
+                .then(data => renderBlockedIPs(Array.isArray(data) ? data : []))
+                .catch(() => {});
+        }
+
+        function renderBlockedIPs(blockedList) {
+            const tbody = document.getElementById('blocked-ips-table');
+            const badge = document.getElementById('blocked-count-badge');
+            if (!tbody) return;
+
+            badge.textContent = blockedList.length + ' Blocked';
+            badge.className = blockedList.length > 0
+                ? 'bg-orange-500/30 text-orange-300 text-xs font-bold px-2 py-0.5 rounded-full border border-orange-500/40 animate-pulse'
+                : 'bg-slate-700/30 text-slate-400 text-xs font-bold px-2 py-0.5 rounded-full border border-white/10';
+
+            if (blockedList.length === 0) {
+                tbody.innerHTML = `<tr id="no-blocks-row"><td colspan="7" class="p-6 text-center text-slate-500 italic">✅ No IPs currently blocked — system is monitoring</td></tr>`;
+                return;
+            }
+
+            tbody.innerHTML = blockedList.map(b => {
+                const blockedAt = new Date(b.blocked_at);
+                const unblockAt = new Date(blockedAt.getTime() + 3600 * 1000);
+                const remaining = Math.max(0, Math.floor((unblockAt - Date.now()) / 1000));
+                const mm = String(Math.floor(remaining / 60)).padStart(2, '0');
+                const ss = String(remaining % 60).padStart(2, '0');
+                const conf = b.confidence ? parseFloat(b.confidence).toFixed(1) + '%' : '100.0%';
+                const attackBadge = {
+                    'PortScan': 'bg-yellow-500/20 text-yellow-300 border-yellow-500/30',
+                    'DoS': 'bg-red-500/20 text-red-300 border-red-500/30',
+                    'DDoS': 'bg-red-600/20 text-red-200 border-red-600/30',
+                    'ManualBlock': 'bg-slate-500/20 text-slate-300 border-slate-500/30'
+                }[b.attack_type] || 'bg-orange-500/20 text-orange-300 border-orange-500/30';
+
+                return `<tr class="hover:bg-white/5 transition border-l-2 border-orange-500">
+                    <td class="p-3 font-bold text-orange-300">${b.ip}</td>
+                    <td class="p-3"><span class="px-2 py-0.5 rounded border text-[10px] font-bold ${attackBadge}">${b.attack_type}</span></td>
+                    <td class="p-3 text-emerald-400 font-bold">${conf}</td>
+                    <td class="p-3 text-slate-400">${blockedAt.toLocaleTimeString()}</td>
+                    <td class="p-3 text-yellow-400 font-mono">${remaining > 0 ? mm + ':' + ss : '⏰ Expiring...'}</td>
+                    <td class="p-3 text-slate-500 max-w-[180px] truncate" title="${b.reason}">${b.reason}</td>
+                    <td class="p-3">
+                        <button onclick="unblockIP('${b.ip}')"
+                            class="bg-emerald-600/80 hover:bg-emerald-500 text-white text-[10px] font-bold px-2 py-1 rounded transition">
+                            🔓 Unblock
+                        </button>
+                    </td>
+                </tr>`;
+            }).join('');
+        }
+
+        function manualBlockIP() {
+            const input = document.getElementById('manual-block-input');
+            const ip = input.value.trim();
+            if (!ip) return;
+            const ipRegex = /^(\d{1,3}\.){3}\d{1,3}$/;
+            if (!ipRegex.test(ip)) { alert('Please enter a valid IPv4 address'); return; }
+
+            fetch('/api/firewall/block', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ip})
+            }).then(r => r.json()).then(data => {
+                if (data.success) {
+                    input.value = '';
+                    showToast(`🚫 ${ip} has been blocked`, 'orange');
+                    fetchBlockedIPs();
+                } else {
+                    showToast(`⚠️ Failed to block ${ip} — may be whitelisted`, 'red');
+                }
+            });
+        }
+
+        function unblockIP(ip) {
+            fetch('/api/firewall/unblock', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ip})
+            }).then(r => r.json()).then(data => {
+                if (data.success) {
+                    showToast(`🔓 ${ip} has been unblocked`, 'emerald');
+                    fetchBlockedIPs();
+                }
+            });
+        }
+
+        function showToast(message, color='emerald') {
+            const colors = {
+                emerald: 'bg-emerald-900/90 text-emerald-300 border-emerald-500/40',
+                orange:  'bg-orange-900/90 text-orange-300 border-orange-500/40',
+                red:     'bg-red-900/90 text-red-300 border-red-500/40'
+            };
+            const toast = document.createElement('div');
+            toast.className = `fixed bottom-24 right-6 z-50 px-4 py-2.5 rounded-lg border text-sm font-semibold shadow-xl transition-all ${colors[color] || colors.emerald}`;
+            toast.textContent = message;
+            document.body.appendChild(toast);
+            setTimeout(() => { toast.style.opacity = '0'; setTimeout(() => toast.remove(), 400); }, 3000);
+        }
+
+        fetchBlockedIPs();
+
         // -------------------------------------------------------------
         // Chatbot Functions
         // -------------------------------------------------------------
