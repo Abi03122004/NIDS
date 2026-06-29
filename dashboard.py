@@ -323,8 +323,13 @@ def api_chatbot():
         return jsonify({"error": "Message is required"}), 400
         
     session_id = request.remote_addr
-    response_text = chatbot_engine.ask(session_id, message)
-    return jsonify({"response": response_text})
+    
+    from flask import Response
+    def generate():
+        for chunk in chatbot_engine.ask_stream(session_id, message):
+            yield chunk
+            
+    return Response(generate(), mimetype='text/plain')
 
 # ── Prevention API ─────────────────────────────────────────────────────────
 @app.route("/api/firewall/blocked")

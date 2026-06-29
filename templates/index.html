@@ -1572,23 +1572,31 @@
         }
         
         function appendChatMessage(sender, text) {
+            const placeholder = appendChatMessagePlaceholder(sender);
+            updateChatMessageContent(placeholder, text);
+        }
+
+        function appendChatMessagePlaceholder(sender) {
             const msgs = document.getElementById('chatbot-messages');
             const div = document.createElement('div');
-            
-            // Format text (simple markdown bolding, code blocks)
-            let formattedText = text
-                .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
-                .replace(/```([\s\S]*?)```/g, '<pre class="bg-slate-950 border border-white/5 p-3 rounded mt-2 text-xs overflow-x-auto text-slate-300"><code>$1</code></pre>')
-                .replace(/`([^`]+)`/g, '<code class="bg-slate-950 border border-white/10 px-1.5 py-0.5 rounded text-emerald-400">$1</code>')
-                .replace(/\n/g, '<br>');
-                
             if (sender === 'user') {
                 div.className = "bg-emerald-600/20 border border-emerald-500/30 text-emerald-100 p-3.5 rounded-lg max-w-[85%] rounded-tr-none text-xs self-end ml-auto shadow-md";
             } else {
                 div.className = "bg-slate-800/80 border border-white/10 text-slate-200 p-3.5 rounded-lg max-w-[85%] rounded-tl-none text-xs leading-relaxed shadow-md";
             }
-            div.innerHTML = formattedText;
             msgs.appendChild(div);
+            msgs.scrollTop = msgs.scrollHeight;
+            return div;
+        }
+
+        function updateChatMessageContent(div, text) {
+            const msgs = document.getElementById('chatbot-messages');
+            let formattedText = text
+                .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+                .replace(/```([\s\S]*?)```/g, '<pre class="bg-slate-950 border border-white/5 p-3 rounded mt-2 text-xs overflow-x-auto text-slate-300"><code>$1</code></pre>')
+                .replace(/`([^`]+)`/g, '<code class="bg-slate-950 border border-white/10 px-1.5 py-0.5 rounded text-emerald-400">$1</code>')
+                .replace(/\n/g, '<br>');
+            div.innerHTML = formattedText;
             msgs.scrollTop = msgs.scrollHeight;
         }
 
@@ -1609,6 +1617,9 @@
             msgs.appendChild(div);
             msgs.scrollTop = msgs.scrollHeight;
             
+            let aiResponseText = "";
+            let aiMessageDiv = null;
+
             fetch('/api/chatbot', {
                 method: 'POST',
                 headers: {
@@ -1616,17 +1627,34 @@
                 },
                 body: JSON.stringify({ message: msg })
             })
-            .then(res => res.json())
-            .then(data => {
+            .then(response => {
                 document.getElementById(loadingId).remove();
-                if (data.error) {
-                    appendChatMessage('ai', '⚠️ ' + data.error);
-                } else {
-                    appendChatMessage('ai', data.response || "No response.");
+                if (!response.ok) {
+                    throw new Error("HTTP error " + response.status);
                 }
+                
+                // Create placeholders for real-time live typing
+                aiMessageDiv = appendChatMessagePlaceholder('ai');
+                
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                
+                function readChunk() {
+                    return reader.read().then(({ done, value }) => {
+                        if (done) {
+                            return;
+                        }
+                        const chunkText = decoder.decode(value, { stream: true });
+                        aiResponseText += chunkText;
+                        updateChatMessageContent(aiMessageDiv, aiResponseText);
+                        return readChunk();
+                    });
+                }
+                return readChunk();
             })
             .catch(err => {
-                document.getElementById(loadingId).remove();
+                const loader = document.getElementById(loadingId);
+                if (loader) loader.remove();
                 appendChatMessage('ai', '⚠️ Network Error: ' + err.message);
             });
         }

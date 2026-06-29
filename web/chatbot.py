@@ -193,6 +193,118 @@ class NIDSChatbot:
                 )
             return f"⚠️ Error: {err}"
 
+    def ask_stream(self, session_id: str, question: str):
+        """Optimized generator streaming responses for sub-second UI rendering."""
+        if not self.client:
+            yield "⚠️ **GROQ_API_KEY not set.**\nGet a free key at https://console.groq.com → API Keys\nThen set it as an environment variable: `GROQ_API_KEY=your_key`"
+            return
+
+        t_start = time.perf_counter()
+
+        # 11. Cache lookup (Instant 0ms latency for repeated queries)
+        cache_key = hashlib.md5(question.strip().lower().encode()).hexdigest()
+        if cache_key in _response_cache:
+            cached_at, cached_response = _response_cache[cache_key]
+            if time.time() - cached_at < CACHE_TTL_SECONDS:
+                yield f"{cached_response}\n\n*⚡ Cached response*"
+                print(f"[CHATBOT LATENCY] Cache Hit! Total Time: {(time.perf_counter() - t_start)*1000:.2f}ms")
+                return
+
+        # Initialize session
+        if session_id not in self.sessions:
+            self.sessions[session_id] = [
+                {"role": "system", "content": SYSTEM_PROMPT}
+            ]
+
+        # 4. History Pruning: Keep only last 10 messages (5 turns) + system prompt
+        if len(self.sessions[session_id]) > 11:
+            self.sessions[session_id] = [self.sessions[session_id][0]] + self.sessions[session_id][-10:]
+
+        self.sessions[session_id].append({"role": "user", "content": question})
+
+        t_pre = time.perf_counter()
+        print(f"[CHATBOT LATENCY] Preprocessing: {(t_pre - t_start)*1000:.2f}ms")
+
+        try:
+            # 3. First Call (Reduced max_tokens to 256 for rapid routing check)
+            response = eventlet.tpool.execute(
+                self.client.chat.completions.create,
+                model=self.MODEL,
+                messages=self.sessions[session_id],
+                tools=[SQL_TOOL],
+                tool_choice="auto",
+                max_tokens=256,
+                temperature=0.1
+            )
+            
+            t_first_call = time.perf_counter()
+            print(f"[CHATBOT LATENCY] First LLM API Call: {(t_first_call - t_pre)*1000:.2f}ms")
+
+            msg = response.choices[0].message
+
+            # If tool calls are requested (RAG/Text-to-SQL logic)
+            if msg.tool_calls:
+                self.sessions[session_id].append({
+                    "role": "assistant",
+                    "content": msg.content or "",
+                    "tool_calls": [
+                        {
+                            "id": tc.id,
+                            "type": "function",
+                            "function": {
+                                "name": tc.function.name,
+                                "arguments": tc.function.arguments
+                            }
+                        } for tc in msg.tool_calls
+                    ]
+                })
+
+                t_sql_start = time.perf_counter()
+                for tool_call in msg.tool_calls:
+                    args = json.loads(tool_call.function.arguments)
+                    sql_result = execute_sql(args.get("query", ""))
+                    self.sessions[session_id].append({
+                        "role": "tool",
+                        "tool_call_id": tool_call.id,
+                        "content": sql_result
+                    })
+                t_sql_end = time.perf_counter()
+                print(f"[CHATBOT LATENCY] DB Execution: {(t_sql_end - t_sql_start)*1000:.2f}ms")
+
+                # 2. Second Call (Streaming active synthesis)
+                stream_response = eventlet.tpool.execute(
+                    self.client.chat.completions.create,
+                    model=self.MODEL,
+                    messages=self.sessions[session_id],
+                    max_tokens=512,  # Optimized token envelope
+                    temperature=0.3,
+                    stream=True
+                )
+                
+                full_reply = []
+                for chunk in stream_response:
+                    if chunk.choices[0].delta.content:
+                        token = chunk.choices[0].delta.content
+                        full_reply.append(token)
+                        yield token
+                        
+                result = "".join(full_reply)
+            else:
+                # No database query needed, directly stream the first response
+                result = msg.content or ""
+                yield result
+
+            self.sessions[session_id].append({"role": "assistant", "content": result})
+            _response_cache[cache_key] = (time.time(), result)
+            print(f"[CHATBOT LATENCY] Total Generation & Stream Time: {(time.perf_counter() - t_first_call)*1000:.2f}ms")
+
+        except Exception as e:
+            err = str(e)
+            if "429" in err or "rate" in err.lower():
+                yield "⚠️ **Groq rate limit hit.** Wait a moment and try again."
+            else:
+                yield f"⚠️ Error: {err}"
+
 
 # Singleton instance
 chatbot_engine = NIDSChatbot()
