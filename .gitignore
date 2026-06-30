@@ -109,3 +109,6 @@ logs/ids_predictions.db-shm
 .gemini/
 .system_generated/
 scratch/
+
+# Heartbeat
+logs/sniffer.heartbeat
