@@ -3,7 +3,7 @@ Flask-SocketIO
 Flask-Login
 Werkzeug
 eventlet
-gunicorn
+gunicorn==20.1.0
 
 # Machine Learning
 scikit-learn
